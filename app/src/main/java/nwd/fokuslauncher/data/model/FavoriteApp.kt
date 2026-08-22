@@ -1,0 +1,45 @@
+package nwd.fokuslauncher.data.model
+
+/**
+ * A row on the home screen.
+ *
+ * Left side  = [label] that launches [packageName].
+ * Right side = minimal icon ([iconName]) that launches [iconPackage].
+ *
+ * The two sides are independent; tapping the label opens one app,
+ * tapping the icon opens another (or the same if [iconPackage] is empty/equal).
+ */
+data class FavoriteApp(
+    val label: String,
+    val packageName: String,
+    val iconName: String = "circle",
+    val iconPackage: String = "", // Encoded ShortcutTarget or legacy package name.
+    /**
+     * Same encoding as [appProfileKey]: `"0"` for the owner profile, else
+     * [UserHandle.hashCode] for work / secondary users (see [drawerOpenCountKey]).
+     */
+    val profileKey: String = "0",
+) {
+    /** Kept for backwards compat */
+    val categoryLabel: String get() = label
+
+    /** Resolved icon target with legacy fallback to package-based launch. */
+    val resolvedIconTarget: ShortcutTarget
+        get() = ShortcutTarget.decode(iconPackage) ?: ShortcutTarget.App(packageName)
+
+    /** Legacy helper still used in tests and older call sites. */
+    val resolvedIconPackage: String
+        get() = (resolvedIconTarget as? ShortcutTarget.App)?.packageName ?: packageName
+}
+
+fun favoriteAppStableKey(favorite: FavoriteApp): String {
+    val base = drawerOpenCountKey(favorite.packageName, favorite.profileKey)
+    val target = favorite.resolvedIconTarget
+    return if (target is ShortcutTarget.LauncherShortcut &&
+                    target.packageName == favorite.packageName
+    ) {
+        "$base#shortcut:${target.shortcutId}"
+    } else {
+        base
+    }
+}

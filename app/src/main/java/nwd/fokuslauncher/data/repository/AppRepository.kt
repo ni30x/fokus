@@ -1,0 +1,1452 @@
+package nwd.fokuslauncher.data.repository
+
+import android.app.SearchManager
+import android.content.ComponentName
+import android.content.Context
+import android.graphics.drawable.Drawable
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.Uri
+import android.content.pm.ApplicationInfo
+import android.content.pm.LauncherApps
+import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
+import android.content.pm.ShortcutInfo
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.Process
+import android.os.UserHandle
+import android.os.UserManager
+import android.provider.Settings
+import android.util.Log
+import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
+import nwd.fokuslauncher.R
+import nwd.fokuslauncher.data.database.dao.AppDao
+import nwd.fokuslauncher.data.database.entity.AppCategoryDefinitionEntity
+import nwd.fokuslauncher.data.database.entity.AppCategoryEntity
+import nwd.fokuslauncher.data.database.entity.HiddenAppEntity
+import nwd.fokuslauncher.data.database.entity.RenamedAppEntity
+import nwd.fokuslauncher.data.database.entity.SuppressedCategoryDefinitionEntity
+import nwd.fokuslauncher.data.model.AddCategoryResult
+import nwd.fokuslauncher.data.model.reservedCategoryAddFailure
+import nwd.fokuslauncher.data.model.AppInfo
+import nwd.fokuslauncher.data.model.ReservedCategoryNames
+import nwd.fokuslauncher.data.model.AppShortcutAction
+import nwd.fokuslauncher.data.model.DotSearchTargetMode
+import nwd.fokuslauncher.data.model.ShortcutTarget
+import nwd.fokuslauncher.data.model.appMetadataKey
+import nwd.fokuslauncher.data.model.appProfileKey
+import nwd.fokuslauncher.data.model.HOST_APP_METADATA_SENTINEL
+import nwd.fokuslauncher.data.model.launcherShortcutIdForMetadata
+import nwd.fokuslauncher.data.model.overlayCategory
+import nwd.fokuslauncher.data.model.SystemCategoryKeys
+import nwd.fokuslauncher.utils.PrivateSpaceManager
+import nwd.fokuslauncher.utils.registerBroadcastReceiverNotExported
+import nwd.fokuslauncher.utils.ProfileHeuristics
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
+
+/**
+ * Repository responsible for loading and caching installed apps from the system, and managing
+ * hidden/renamed/categorized apps via Room.
+ */
+@Singleton
+class AppRepository
+@Inject
+constructor(
+        @param:ApplicationContext private val context: Context,
+        private val appDao: AppDao,
+        private val privateSpaceManager: PrivateSpaceManager
+) {
+    private var cachedApps: List<AppInfo>? = null
+    private var cachedArchivedApps: List<AppInfo>? = null
+    private val installedAppsVersion = MutableStateFlow(0L)
+    private val removedPackages = MutableSharedFlow<RemovedApp>(extraBufferCapacity = 8)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val delayedInstalledAppsRefresh =
+            Runnable {
+                cachedApps = null
+                cachedArchivedApps = null
+                installedAppsVersion.value += 1
+            }
+    private val packageChangeReceiver =
+            object : android.content.BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    val replacing = intent?.getBooleanExtra(Intent.EXTRA_REPLACING, false) == true
+                    when (intent?.action) {
+                        Intent.ACTION_PACKAGE_ADDED,
+                        Intent.ACTION_PACKAGE_CHANGED,
+                        Intent.ACTION_PACKAGE_REMOVED,
+                        Intent.ACTION_PACKAGE_REPLACED -> {
+                            if (intent.action == Intent.ACTION_PACKAGE_REMOVED && replacing) return
+                            if (intent.action == Intent.ACTION_PACKAGE_REMOVED) {
+                                extractRemovedApp(intent)?.let(removedPackages::tryEmit)
+                            }
+                            scheduleInstalledAppsRefresh()
+                        }
+                    }
+                }
+            }
+
+    private val profileChangeReceiver =
+            object : android.content.BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    when (intent?.action) {
+                        Intent.ACTION_MANAGED_PROFILE_ADDED,
+                        Intent.ACTION_MANAGED_PROFILE_REMOVED -> scheduleInstalledAppsRefresh()
+                    }
+                }
+            }
+
+    private val launcherAppsCallback =
+            object : LauncherApps.Callback() {
+                override fun onPackageRemoved(packageName: String, user: UserHandle) {
+                    removedPackages.tryEmit(
+                            RemovedApp(
+                                    packageName = packageName,
+                                    profileKey = profileKeyForUser(user),
+                            )
+                    )
+                    scheduleInstalledAppsRefresh()
+                }
+
+                override fun onPackageAdded(packageName: String, user: UserHandle) {
+                    scheduleInstalledAppsRefresh()
+                }
+
+                override fun onPackageChanged(packageName: String, user: UserHandle) {
+                    scheduleInstalledAppsRefresh()
+                }
+
+                override fun onPackagesAvailable(
+                        packageNames: Array<out String>,
+                        user: UserHandle,
+                        replacing: Boolean,
+                ) {
+                    scheduleInstalledAppsRefresh()
+                }
+
+                override fun onPackagesUnavailable(
+                        packageNames: Array<out String>,
+                        user: UserHandle,
+                        replacing: Boolean,
+                ) {
+                    if (!replacing) {
+                        val profileKey = profileKeyForUser(user)
+                        for (packageName in packageNames) {
+                            removedPackages.tryEmit(
+                                    RemovedApp(packageName = packageName, profileKey = profileKey)
+                            )
+                        }
+                    }
+                    scheduleInstalledAppsRefresh()
+                }
+            }
+
+    private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    @Volatile private var currentHiddenPackageNames: Set<String> = emptySet()
+
+    init {
+        registerPackageChangeReceiver()
+        registerProfileChangeReceiver()
+        registerLauncherAppsCallback()
+        observePlayStoreIsolation()
+    }
+
+    private fun observePlayStoreIsolation() {
+        repositoryScope.launch {
+            appDao.getHiddenApps().collect { hiddenApps ->
+                currentHiddenPackageNames = hiddenApps.map { it.packageName }.toSet()
+            }
+        }
+    }
+
+    fun isPackageHiddenFromPlayStoreAndSystem(packageName: String): Boolean {
+        return currentHiddenPackageNames.contains(packageName)
+    }
+
+    private fun launcherAppsOrNull(): LauncherApps? =
+            try {
+                context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+            } catch (_: Exception) {
+                null
+            }
+
+    private fun userManagerOrNull(): UserManager? =
+            try {
+                context.getSystemService(Context.USER_SERVICE) as? UserManager
+            } catch (_: Exception) {
+                null
+            }
+
+    private fun contextAsUser(user: UserHandle): Context {
+        if (user == Process.myUserHandle()) return context
+        return runCatching {
+            val m =
+                    Context::class.java.getMethod(
+                            "createContextAsUser",
+                            UserHandle::class.java,
+                            Int::class.javaPrimitiveType,
+                    )
+            m.invoke(context, user, 0) as Context
+        }.getOrDefault(context)
+    }
+
+    /** System/reserved category labels that cannot be renamed, deleted, or reordered as user slots. */
+    private fun isProtectedCategoryName(normalized: String): Boolean =
+            normalized.equals(ReservedCategoryNames.ALL_APPS, ignoreCase = true) ||
+                    normalized.equals(ReservedCategoryNames.PRIVATE, ignoreCase = true) ||
+                    normalized.equals(ReservedCategoryNames.WORK, ignoreCase = true) ||
+                    normalized.equals(ReservedCategoryNames.UNCATEGORIZED, ignoreCase = true)
+
+    // --- App Loading ---
+
+    /**
+     * Returns all non-archived launchable apps, sorted alphabetically. Results are cached in memory
+     * after the first successful non-empty launcher snapshot.
+     *
+     * Empty lists are not cached: [LauncherApps.getActivityList] / package events can briefly
+     * yield no activities; caching that would hide every app until process death (e.g. force stop).
+     */
+    fun getInstalledApps(): List<AppInfo> {
+        cachedApps?.let {
+            return it
+        }
+
+        val allApps = loadInstalledAppsMergedAcrossProfiles()
+        val apps = allApps.filterNot { it.isArchived }
+        val archivedApps = allApps.filter { it.isArchived }
+        when {
+            allApps.isNotEmpty() && !isIncompleteOwnerProfileSnapshot(allApps) -> {
+                cachedApps = apps
+                cachedArchivedApps = archivedApps
+            }
+            allApps.isNotEmpty() ->
+                    Log.w(
+                            TAG,
+                            "not caching installed-apps snapshot (${mergedAppsSummary(allApps)}); " +
+                                    "owner profile still missing from merged list",
+                    )
+        }
+        return apps
+    }
+
+    suspend fun getInstalledAppsOnBackground(): List<AppInfo> =
+            withContext(Dispatchers.IO) { getInstalledApps() }
+
+    /** Returns archived apps that are intentionally hidden from home, drawer, and pickers. */
+    fun getArchivedApps(): List<AppInfo> {
+        cachedArchivedApps?.let { return it }
+        val allApps = loadInstalledAppsMergedAcrossProfiles()
+        val apps = allApps.filterNot { it.isArchived }
+        val archivedApps = allApps.filter { it.isArchived }
+        if (allApps.isNotEmpty() && !isIncompleteOwnerProfileSnapshot(allApps)) {
+            cachedApps = apps
+            cachedArchivedApps = archivedApps
+        }
+        return archivedApps
+    }
+
+    suspend fun getArchivedAppsOnBackground(): List<AppInfo> =
+            withContext(Dispatchers.IO) { getArchivedApps() }
+
+    /**
+     * Returns launchable package/profile keys for the requested profiles using one launcher query
+     * per profile instead of one query per package.
+     */
+    fun getLaunchableAppKeys(profileKeys: Set<String>): Set<String> {
+        val normalizedProfileKeys =
+                profileKeys
+                        .asSequence()
+                        .map { it.ifBlank { "0" } }
+                        .toSet()
+        if (normalizedProfileKeys.isEmpty()) {
+            return emptySet()
+        }
+
+        val launcherApps = launcherAppsOrNull()
+        val userManager = userManagerOrNull()
+
+        if (launcherApps == null || userManager == null) {
+            return if ("0" in normalizedProfileKeys) {
+                loadInstalledAppsLegacyQuery()
+                        .mapTo(linkedSetOf()) { appMetadataKey(it.packageName, it.userHandle) }
+            } else {
+                emptySet()
+            }
+        }
+
+        val launchableKeys = linkedSetOf<String>()
+        for (user in userManager.userProfiles) {
+            if (privateSpaceManager.isPrivateSpaceProfile(user)) continue
+            val profileKey = if (user == Process.myUserHandle()) "0" else appProfileKey(user)
+            if (profileKey !in normalizedProfileKeys) continue
+
+            val activities =
+                    try {
+                        launcherApps.getActivityList(null, user)
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+            for (activity in activities) {
+                if (isArchivedLauncherActivity(activity)) continue
+                val packageName = activity.applicationInfo.packageName
+                if (packageName == context.packageName) continue
+                val userHandle = if (user == Process.myUserHandle()) null else user
+                launchableKeys += appMetadataKey(packageName, userHandle)
+            }
+        }
+        return launchableKeys
+    }
+
+    /**
+     * Loads launchable activities per [UserManager.userProfiles] via [LauncherApps.getActivityList],
+     * so cloned / parallel / work-profile installs (same package as the primary user) still
+     * appear. Private Space is skipped here; those apps stay in the dedicated Private drawer
+     * section.
+     */
+    private fun loadInstalledAppsMergedAcrossProfiles(): List<AppInfo> {
+        val launcherApps = launcherAppsOrNull()
+        val userManager = userManagerOrNull()
+
+        if (launcherApps == null || userManager == null) {
+            return loadInstalledAppsLegacyQuery()
+        }
+
+        val myUser = Process.myUserHandle()
+        var result = mergeLauncherActivitiesAcrossProfiles(launcherApps, userManager)
+        val shouldRetryOwnerProfile =
+                userManager.userProfiles.contains(myUser) &&
+                        (result.isEmpty() || isIncompleteOwnerProfileSnapshot(result))
+        if (shouldRetryOwnerProfile) {
+            Log.w(
+                    TAG,
+                    "retrying LauncherApps load (${retryReason(result)}; " +
+                            "${mergedAppsSummary(result)}; " +
+                            "${profileLauncherAppsSummary(launcherApps, userManager, "before retry")})",
+            )
+            repeat(LOAD_EMPTY_RETRY_COUNT) { attempt ->
+                Thread.sleep(LOAD_EMPTY_RETRY_DELAY_MS)
+                result = mergeLauncherActivitiesAcrossProfiles(launcherApps, userManager)
+                if (result.isNotEmpty() && !isIncompleteOwnerProfileSnapshot(result)) {
+                    Log.i(
+                            TAG,
+                            "LauncherApps load recovered on retry ${attempt + 1} " +
+                                    "(${mergedAppsSummary(result)})",
+                    )
+                    return@repeat
+                }
+                Log.w(
+                        TAG,
+                        "LauncherApps retry ${attempt + 1}/${LOAD_EMPTY_RETRY_COUNT} still " +
+                                "${retryReason(result)} (${mergedAppsSummary(result)})",
+                )
+            }
+        }
+        when {
+            result.isEmpty() -> logEmptyLauncherAppsLoad(launcherApps, userManager)
+            isIncompleteOwnerProfileSnapshot(result) ->
+                    logIncompleteOwnerProfileLoad(launcherApps, userManager, result)
+        }
+        return result
+    }
+
+    private fun mergeLauncherActivitiesAcrossProfiles(
+            launcherApps: LauncherApps,
+            userManager: UserManager,
+    ): List<AppInfo> {
+        val myUser = Process.myUserHandle()
+        val rawEntries = mutableListOf<RawLauncherEntry>()
+
+        for (user in userManager.userProfiles) {
+            if (privateSpaceManager.isPrivateSpaceProfile(user)) continue
+
+            val activities =
+                    try {
+                        launcherApps.getActivityList(null, user)
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+
+            for (info in activities) {
+                val packageName = info.applicationInfo.packageName
+                if (packageName == context.packageName) continue
+
+                val rawLabel =
+                        try {
+                            info.label.toString()
+                        } catch (_: Exception) {
+                            packageName
+                        }
+                val isPrimary = user == myUser
+                rawEntries.add(
+                        RawLauncherEntry(
+                                packageName = packageName,
+                                rawLabel = rawLabel,
+                                user = user,
+                                isPrimary = isPrimary,
+                                icon = null,
+                                category = inferCategoryFromApplicationInfo(info.applicationInfo),
+                                componentName = info.componentName,
+                                isArchived = isArchivedLauncherActivity(info),
+                        )
+                )
+            }
+        }
+
+        val ownerLabels: Map<String, String> =
+                rawEntries
+                        .filter { it.isPrimary }
+                        .distinctBy { it.packageName }
+                        .associate { it.packageName to it.rawLabel.trim().ifEmpty { it.packageName } }
+
+        val collected =
+                rawEntries.map { e ->
+                    val finalLabel =
+                            if (e.isPrimary) {
+                                e.rawLabel.trim().ifEmpty { e.packageName }
+                            } else {
+                                ownerLabels[e.packageName]?.takeIf { it.isNotBlank() }
+                                        ?: ProfileHeuristics.stripLeadingWorkPrefix(e.rawLabel)
+                                        ?: e.rawLabel.trim().ifEmpty { e.packageName }
+                            }
+                    AppInfo(
+                            packageName = e.packageName,
+                            label = finalLabel,
+                            icon = e.icon,
+                            category = e.category,
+                            userHandle = if (e.isPrimary) null else e.user,
+                            componentName =
+                                    if (e.isPrimary && !e.isArchived) null else e.componentName,
+                            isArchived = e.isArchived,
+                    )
+                }
+
+        val primary = collected.filter { it.userHandle == null }.distinctBy { it.packageName }
+        val secondary =
+                collected.filter { it.userHandle != null }.distinctBy {
+                    "${it.packageName}|${it.componentName?.flattenToString()}"
+                }
+
+        val pinnedShortcuts =
+                loadPinnedLauncherShortcutApps(
+                        launcherApps = launcherApps,
+                        users = userManager.userProfiles.filterNot(privateSpaceManager::isPrivateSpaceProfile),
+                        knownApps = (primary + secondary).filterNot { it.isArchived },
+                )
+
+        return (primary + secondary + pinnedShortcuts).sortedBy { it.label.lowercase() }
+    }
+
+    /**
+     * True when the owner profile is present on the device but missing from a non-empty snapshot
+     * while at least one secondary profile has apps (transient [LauncherApps] enumeration on
+     * Android 17+).
+     */
+    private fun isIncompleteOwnerProfileSnapshot(apps: List<AppInfo>): Boolean {
+        if (apps.isEmpty()) return false
+        val hasOwnerApps = apps.any { it.userHandle == null }
+        val hasSecondaryApps = apps.any { it.userHandle != null }
+        return !hasOwnerApps && hasSecondaryApps
+    }
+
+    private fun logEmptyLauncherAppsLoad(launcherApps: LauncherApps, userManager: UserManager) {
+        Log.w(TAG, profileLauncherAppsSummary(launcherApps, userManager, "no installable apps"))
+    }
+
+    private fun logIncompleteOwnerProfileLoad(
+            launcherApps: LauncherApps,
+            userManager: UserManager,
+            merged: List<AppInfo>,
+    ) {
+        Log.w(
+                TAG,
+                profileLauncherAppsSummary(
+                        launcherApps,
+                        userManager,
+                        "owner profile missing from merged app list after retries; " +
+                                mergedAppsSummary(merged),
+                ),
+        )
+    }
+
+    private fun retryReason(apps: List<AppInfo>): String =
+            if (apps.isEmpty()) "empty merged list" else "owner profile missing from merged list"
+
+    private fun mergedAppsSummary(apps: List<AppInfo>): String {
+        val ownerCount = apps.count { it.userHandle == null }
+        val secondaryCount = apps.count { it.userHandle != null }
+        return "merged total=${apps.size} owner=$ownerCount secondary=$secondaryCount"
+    }
+
+    private fun profileLauncherAppsSummary(
+            launcherApps: LauncherApps,
+            userManager: UserManager,
+            reason: String,
+    ): String {
+        val myUser = Process.myUserHandle()
+        val profileSummary =
+                userManager.userProfiles.joinToString(separator = "; ") { user ->
+                    val activityCount =
+                            try {
+                                launcherApps.getActivityList(null, user).size
+                            } catch (_: Exception) {
+                                -1
+                            }
+                    val userType =
+                            if (Build.VERSION.SDK_INT >= 35) {
+                                try {
+                                    launcherApps.getLauncherUserInfo(user)?.userType
+                                } catch (_: Exception) {
+                                    null
+                                }
+                            } else {
+                                null
+                            }
+                    val privateSpace = privateSpaceManager.isPrivateSpaceProfile(user)
+                    "user=${user.hashCode()} primary=${user == myUser} private=$privateSpace activities=$activityCount userType=$userType"
+                }
+        return "LauncherApps $reason (sdk=${Build.VERSION.SDK_INT}); profiles: $profileSummary"
+    }
+
+    private data class RawLauncherEntry(
+            val packageName: String,
+            val rawLabel: String,
+            val user: UserHandle,
+            val isPrimary: Boolean,
+            val icon: Drawable?,
+            val category: String,
+            val componentName: ComponentName,
+            val isArchived: Boolean,
+    )
+
+    private fun isArchivedLauncherActivity(info: android.content.pm.LauncherActivityInfo): Boolean =
+            Build.VERSION.SDK_INT >= 35 &&
+                    runCatching { info.applicationInfo.isArchived }.getOrDefault(false)
+
+    private fun loadPinnedLauncherShortcutApps(
+            launcherApps: LauncherApps,
+            users: List<UserHandle>,
+            knownApps: List<AppInfo>,
+    ): List<AppInfo> {
+        if (knownApps.isEmpty()) return emptyList()
+        val myUser = Process.myUserHandle()
+        val appsByProfile =
+                knownApps.groupBy { appProfileKey(it.userHandle) }
+        return users.flatMap { user ->
+            val profileKey = if (user == myUser) "0" else appProfileKey(user)
+            val appsForUser = appsByProfile[profileKey].orEmpty()
+            appsForUser.flatMap { ownerApp ->
+                loadPinnedShortcutsForPackage(launcherApps, ownerApp.packageName, user).mapNotNull {
+                    shortcut ->
+                    val id = shortcut.id.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val label =
+                            shortcut.shortLabel?.toString()?.trim().takeUnless { it.isNullOrEmpty() }
+                                    ?: shortcut.longLabel?.toString()?.trim().takeUnless {
+                                        it.isNullOrEmpty()
+                                    }
+                                    ?: return@mapNotNull null
+                    AppInfo(
+                            packageName = ownerApp.packageName,
+                            label = label,
+                            icon = null,
+                            category = ownerApp.category,
+                            userHandle = ownerApp.userHandle,
+                            componentName = ownerApp.componentName,
+                            launcherShortcutId = id,
+                    )
+                }
+            }
+        }.distinctBy { app ->
+            "${appProfileKey(app.userHandle)}|${app.packageName}|${app.launcherShortcutId}"
+        }
+    }
+
+    private fun loadPinnedShortcutsForPackage(
+            launcherApps: LauncherApps,
+            packageName: String,
+            user: UserHandle,
+    ): List<ShortcutInfo> =
+            try {
+                val query =
+                        LauncherApps.ShortcutQuery()
+                                .setPackage(packageName)
+                                .setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+                launcherApps.getShortcuts(query, user).orEmpty().filter { it.isEnabled }
+            } catch (_: Exception) {
+                emptyList()
+            }
+
+    /** Fallback when [LauncherApps] / [UserManager] are unavailable (e.g. partial test doubles). */
+    private fun loadInstalledAppsLegacyQuery(): List<AppInfo> {
+        val pm = context.packageManager
+        val mainIntent =
+                try {
+                    Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+                } catch (_: Exception) {
+                    Intent()
+                }
+
+        val resolveInfos: List<ResolveInfo> =
+                try {
+                    pm.queryIntentActivities(mainIntent, 0)
+                } catch (_: Exception) {
+                    emptyList()
+                }
+
+        return resolveInfos
+                .asSequence()
+                .filter { it.activityInfo.packageName != context.packageName }
+                .map { resolveInfo ->
+                    val packageName = resolveInfo.activityInfo.packageName
+                    val label =
+                            resolveInfo.nonLocalizedLabel
+                                    ?.toString()
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: try {
+                                        resolveInfo.loadLabel(pm).toString()
+                                    } catch (_: Exception) {
+                                        packageName
+                                    }
+                    AppInfo(
+                            packageName = packageName,
+                            label = label,
+                            icon = null,
+                            category =
+                                    inferCategoryFromApplicationInfo(
+                                            resolveInfo.activityInfo.applicationInfo
+                                                    ?: try {
+                                                        pm.getApplicationInfo(packageName, 0)
+                                                    } catch (_: Exception) {
+                                                        null
+                                                    }
+                                    )
+                    )
+                }
+                .distinctBy { it.packageName }
+                .sortedBy { it.label.lowercase() }
+                .toList()
+    }
+
+    /** Clears the cached app list, forcing a reload on next access. */
+    fun invalidateCache() {
+        cachedApps = null
+        cachedArchivedApps = null
+        installedAppsVersion.value += 1
+    }
+
+    /**
+     * Invalidates immediately, then again shortly after. Package / archive events often arrive
+     * before [LauncherApps.getActivityList] reflects the new state; a single invalidate can cache
+     * a stale non-empty snapshot until the next unrelated bump.
+     */
+    private fun scheduleInstalledAppsRefresh() {
+        invalidateCache()
+        mainHandler.removeCallbacks(delayedInstalledAppsRefresh)
+        mainHandler.postDelayed(delayedInstalledAppsRefresh, INSTALLED_APPS_REFRESH_RETRY_DELAY_MS)
+    }
+
+    private fun profileKeyForUser(user: UserHandle): String =
+            if (user == Process.myUserHandle()) "0" else appProfileKey(user)
+
+    fun getInstalledAppsVersion(): StateFlow<Long> = installedAppsVersion
+    fun getRemovedPackages(): SharedFlow<RemovedApp> = removedPackages.asSharedFlow()
+
+    /**
+     * Launches an app by its package name.
+     * @param options optional [android.app.ActivityOptions] bundle for custom transition
+     * animations.
+     * @return true if the app was launched successfully, false otherwise.
+     */
+    fun launchApp(packageName: String, options: Bundle? = null): Boolean {
+        if (isPackageHiddenFromPlayStoreAndSystem(packageName)) return false
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+        return if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent, options)
+            true
+        } else {
+            false
+        }
+    }
+
+    /**
+     * Launches a web-style search in the given app or via the system resolver. [target] null uses
+     * [Intent.ACTION_WEB_SEARCH] without [Intent.setPackage]. [ShortcutTarget.DeepLink] URIs may
+     * include `%q` for the URL-encoded search text (legacy saved templates may still use `%s` or
+     * `{query}`; those are expanded the same way).
+     */
+    fun launchDotSearch(
+            profileKey: String,
+            target: ShortcutTarget?,
+            query: String,
+            mode: DotSearchTargetMode = DotSearchTargetMode.SEARCH,
+    ): Boolean {
+        val launchContext = dotSearchLaunchContext(profileKey, target)
+        val flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        when (target) {
+            null -> {
+                val intent =
+                        Intent(Intent.ACTION_WEB_SEARCH).apply {
+                            putExtra(SearchManager.QUERY, query)
+                            addFlags(flags)
+                        }
+                return startDotSearchActivity(launchContext, intent)
+            }
+            is ShortcutTarget.App -> {
+                val pkg = target.packageName
+                if (query.isBlank() && mode == DotSearchTargetMode.SHORTCUT) {
+                    return launchDotShortcutTarget(profileKey, target)
+                }
+                val webSearch =
+                        Intent(Intent.ACTION_WEB_SEARCH).apply {
+                            setPackage(pkg)
+                            putExtra(SearchManager.QUERY, query)
+                            addFlags(flags)
+                        }
+                if (startDotSearchActivity(launchContext, webSearch)) return true
+                val inAppSearch =
+                        Intent(Intent.ACTION_SEARCH).apply {
+                            setPackage(pkg)
+                            putExtra(SearchManager.QUERY, query)
+                            putExtra("query", query)
+                            addFlags(flags)
+                        }
+                return startDotSearchActivity(launchContext, inAppSearch)
+            }
+            is ShortcutTarget.DeepLink -> {
+                if (query.isBlank() &&
+                                mode == DotSearchTargetMode.SHORTCUT &&
+                                !intentUriContainsQueryPlaceholder(target.intentUri)
+                ) {
+                    return launchDotShortcutTarget(profileKey, target)
+                }
+                val expanded = expandDotSearchDeepLink(target.intentUri, query)
+                val intent =
+                        try {
+                            Intent.parseUri(expanded, Intent.URI_INTENT_SCHEME).apply {
+                                addFlags(flags)
+                            }
+                        } catch (_: Exception) {
+                            Intent(Intent.ACTION_VIEW, expanded.toUri()).apply { addFlags(flags) }
+                        }
+                if (!intentUriContainsQueryPlaceholder(target.intentUri)) {
+                    intent.putExtra(SearchManager.QUERY, query)
+                    intent.putExtra("query", query)
+                }
+                return startDotSearchActivity(launchContext, intent)
+            }
+            is ShortcutTarget.LauncherShortcut,
+            is ShortcutTarget.PhoneDial ->
+                    return query.isBlank() &&
+                            mode == DotSearchTargetMode.SHORTCUT &&
+                            launchDotShortcutTarget(profileKey, target)
+            is ShortcutTarget.WidgetPage -> return false
+        }
+    }
+
+    private fun launchDotShortcutTarget(profileKey: String, target: ShortcutTarget): Boolean =
+            when (target) {
+                is ShortcutTarget.App -> {
+                    val app =
+                            getInstalledApps().firstOrNull {
+                                it.packageName == target.packageName &&
+                                        appProfileKey(it.userHandle) == profileKey
+                            }
+                    val componentName = app?.componentName
+                    val userHandle = app?.userHandle
+                    if (componentName != null && userHandle != null) {
+                        launchMainActivity(componentName, userHandle)
+                    } else {
+                        launchApp(target.packageName)
+                    }
+                }
+                is ShortcutTarget.DeepLink -> {
+                    val intent =
+                            try {
+                                Intent.parseUri(target.intentUri, Intent.URI_INTENT_SCHEME)
+                            } catch (_: Exception) {
+                                Intent(Intent.ACTION_VIEW, target.intentUri.toUri())
+                            }.apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                    startDotSearchActivity(dotSearchLaunchContext(profileKey, target), intent)
+                }
+                is ShortcutTarget.LauncherShortcut ->
+                        launchLauncherShortcut(
+                                target.packageName,
+                                target.shortcutId,
+                                resolveDotSearchUserHandle(profileKey, target),
+                        )
+                is ShortcutTarget.PhoneDial -> {
+                    val intent =
+                            Intent(Intent.ACTION_DIAL, "tel:".toUri()).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                    startDotSearchActivity(dotSearchLaunchContext(profileKey, target), intent)
+                }
+                is ShortcutTarget.WidgetPage -> false
+            }
+
+    private fun intentUriContainsQueryPlaceholder(uri: String): Boolean =
+            uri.contains("%q") || uri.contains("%s") || uri.contains("{query}")
+
+    private fun expandDotSearchDeepLink(intentUri: String, query: String): String {
+        val encoded = Uri.encode(query)
+        return intentUri
+                .replace("{query}", encoded)
+                .replace("%s", encoded)
+                .replace("%q", encoded)
+    }
+
+    private fun resolveDotSearchUserHandle(
+            profileKey: String,
+            target: ShortcutTarget?,
+    ): UserHandle {
+        if (profileKey == "0") return Process.myUserHandle()
+        val pkg =
+                when (target) {
+                    is ShortcutTarget.App -> target.packageName
+                    is ShortcutTarget.LauncherShortcut -> target.packageName
+                    is ShortcutTarget.DeepLink,
+                    is ShortcutTarget.PhoneDial,
+                    is ShortcutTarget.WidgetPage -> null
+                    null -> null
+                } ?: return Process.myUserHandle()
+        val app =
+                getInstalledApps().firstOrNull {
+                    it.packageName == pkg && appProfileKey(it.userHandle) == profileKey
+                }
+        return app?.userHandle ?: Process.myUserHandle()
+    }
+
+    private fun dotSearchLaunchContext(profileKey: String, target: ShortcutTarget?): Context =
+            contextAsUser(resolveDotSearchUserHandle(profileKey, target))
+
+    private fun startDotSearchActivity(ctx: Context, intent: Intent): Boolean {
+        return try {
+            ctx.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * True if [app] exposes an activity that handles [Intent.ACTION_WEB_SEARCH] or
+     * [Intent.ACTION_SEARCH] for its package (same convention as [launchDotSearch] for app targets).
+     */
+    fun appSupportsWebSearch(app: AppInfo): Boolean {
+        val pm = contextForAppUser(app).packageManager
+        val pkg = app.packageName
+        return packageResolvesSearchAction(pm, pkg, Intent.ACTION_WEB_SEARCH) ||
+                packageResolvesSearchAction(pm, pkg, Intent.ACTION_SEARCH)
+    }
+
+    private fun packageResolvesSearchAction(
+            pm: PackageManager,
+            packageName: String,
+            action: String
+    ): Boolean {
+        val probe =
+                Intent(action).apply {
+                    setPackage(packageName)
+                    putExtra(SearchManager.QUERY, ".")
+                }
+        return pm.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY).isNotEmpty()
+    }
+
+    fun filterAppsForDotSearchAppPicker(apps: List<AppInfo>): List<AppInfo> =
+            apps.filter { appSupportsWebSearch(it) }
+
+    private fun contextForAppUser(app: AppInfo): Context {
+        val uh = app.userHandle ?: return context
+        return contextAsUser(uh)
+    }
+
+    /**
+     * Starts a launchable activity in another Android user (e.g. work profile) via [LauncherApps].
+     */
+    fun launchMainActivity(componentName: ComponentName, userHandle: UserHandle, options: Bundle? = null): Boolean {
+        if (isPackageHiddenFromPlayStoreAndSystem(componentName.packageName)) return false
+        return try {
+            val launcherApps = ContextCompat.getSystemService(context, LauncherApps::class.java) ?: return false
+            launcherApps.startMainActivity(componentName, userHandle, null, options)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Starts Android's archived-app restore flow without exposing archived apps in launcher UI. */
+    fun restoreArchivedApp(app: AppInfo): Boolean {
+        val component = app.componentName ?: return false
+        val user = app.userHandle ?: Process.myUserHandle()
+        return launchMainActivity(component, user).also { launched ->
+            if (launched) scheduleInstalledAppsRefresh()
+        }
+    }
+
+    /**
+     * Launches an Android launcher shortcut action (long-press shortcut).
+     */
+    fun launchLauncherShortcut(
+            packageName: String,
+            shortcutId: String,
+            userHandle: UserHandle? = null
+    ): Boolean {
+        if (isPackageHiddenFromPlayStoreAndSystem(packageName)) return false
+        return try {
+            val launcherApps = launcherAppsOrNull() ?: return false
+            val user = userHandle ?: Process.myUserHandle()
+            launcherApps.startShortcut(packageName, shortcutId, null, null, user)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Opens the system app-info screen for [packageName] in the given profile.
+     * Uses [LauncherApps.startAppDetailsActivity] so duplicate installs (personal + private)
+     * open the correct copy; falls back to a package intent for the owner profile only.
+     */
+    fun openAppInfo(
+            packageName: String,
+            userHandle: UserHandle?,
+            componentName: ComponentName? = null,
+    ): Boolean {
+        if (packageName.isBlank() || isPackageHiddenFromPlayStoreAndSystem(packageName)) return false
+        val launcherApps = launcherAppsOrNull() ?: return false
+        val user = userHandle ?: Process.myUserHandle()
+        val component =
+                componentName
+                        ?: launcherApps.getActivityList(packageName, user)
+                                .firstOrNull()
+                                ?.componentName
+        if (component == null) {
+            return startPackageManagementIntent(
+                    packageName,
+                    userHandle,
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            )
+        }
+        return try {
+            launcherApps.startAppDetailsActivity(component, user, null, null)
+            true
+        } catch (_: Exception) {
+            startPackageManagementIntent(
+                    packageName,
+                    userHandle,
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            )
+        }
+    }
+
+    /**
+     * Opens system uninstall UI for [packageName] in the correct Android user.
+     * Work-profile and Private Space apps must not use the owner [Context] alone.
+     */
+    fun startPackageManagementIntent(
+            packageName: String,
+            userHandle: UserHandle?,
+            action: String,
+    ): Boolean {
+        if (packageName.isBlank()) return false
+        val profileUser = userHandle?.takeIf { it != Process.myUserHandle() }
+        val intent =
+                Intent(action).apply {
+                    data = Uri.parse("package:$packageName")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    profileUser?.let { putExtra(Intent.EXTRA_USER, it) }
+                }
+        val launchContext = profileUser?.let { contextAsUser(it) } ?: context
+        return try {
+            launchContext.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Returns all selectable actions for right-side shortcuts:
+     * - One "Open app" action per app
+     * - Launcher long-press actions published by each app (if available)
+     */
+    fun getAllShortcutActions(): List<AppShortcutAction> {
+        val apps = getInstalledApps()
+        val actions = mutableListOf<AppShortcutAction>()
+
+        val launcherApps = launcherAppsOrNull()
+
+        val myUser = Process.myUserHandle()
+        actions.add(
+                AppShortcutAction(
+                        appLabel = context.getString(R.string.shortcut_target_phone),
+                        actionLabel = context.getString(R.string.shortcut_open_dialer),
+                        target = ShortcutTarget.PhoneDial,
+                        profileKey = "0",
+                )
+        )
+        apps.filter { it.launcherShortcutId == null }.forEach { app ->
+            val profileKey = appProfileKey(app.userHandle)
+            actions.add(
+                AppShortcutAction(
+                    appLabel = app.label,
+                    actionLabel = AppShortcutAction.OPEN_APP_LABEL,
+                    target = ShortcutTarget.App(app.packageName),
+                    profileKey = profileKey,
+                )
+            )
+
+            if (launcherApps == null) return@forEach
+
+            val shortcutUser = app.userHandle ?: myUser
+            val shortcuts = try {
+                val queryFlags =
+                        LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
+                                LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or
+                                LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED or
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                    LauncherApps.ShortcutQuery.FLAG_MATCH_CACHED
+                                } else {
+                                    0
+                                }
+                val query =
+                        LauncherApps.ShortcutQuery()
+                                .setPackage(app.packageName)
+                                .setQueryFlags(queryFlags)
+                launcherApps.getShortcuts(query, shortcutUser).orEmpty()
+            } catch (_: Exception) {
+                emptyList()
+            }
+
+            shortcuts
+                .asSequence()
+                .filter { it.isEnabled }
+                .distinctBy { it.id }
+                .forEach { info ->
+                    val shortcutLabel =
+                        info.shortLabel?.toString()?.trim().takeUnless { it.isNullOrEmpty() }
+                            ?: info.longLabel?.toString()?.trim().takeUnless { it.isNullOrEmpty() }
+                            ?: context.getString(R.string.shortcut_generic_label)
+                    actions.add(
+                        AppShortcutAction(
+                            appLabel = app.label,
+                            actionLabel = shortcutLabel,
+                            target = ShortcutTarget.LauncherShortcut(
+                                packageName = app.packageName,
+                                shortcutId = info.id
+                            ),
+                            profileKey = profileKey,
+                        )
+                    )
+                }
+        }
+
+        return actions.distinctBy { it.id }.sortedWith(
+            compareBy<AppShortcutAction> { it.profileKey }
+                .thenBy { it.appLabel.lowercase() }
+                .thenBy { it.actionLabel.lowercase() }
+        )
+    }
+
+    suspend fun getAllShortcutActionsOnBackground(): List<AppShortcutAction> =
+            withContext(Dispatchers.IO) { getAllShortcutActions() }
+
+    // --- Hidden Apps (Room) ---
+
+    /** Returns a Flow of all hidden package names. */
+    fun getHiddenApps(): Flow<List<HiddenAppEntity>> = appDao.getHiddenApps()
+
+    /** Hides an app row by package, profile, and optional launcher shortcut id. */
+    suspend fun hideApp(
+            packageName: String,
+            profileKey: String,
+            launcherShortcutId: String = HOST_APP_METADATA_SENTINEL,
+    ) {
+        appDao.hideApp(HiddenAppEntity(packageName, profileKey, launcherShortcutId))
+    }
+
+    /** Unhides an app row matching the persisted shortcut id. */
+    suspend fun unhideApp(
+            packageName: String,
+            profileKey: String,
+            launcherShortcutId: String,
+    ) {
+        appDao.unhideApp(HiddenAppEntity(packageName, profileKey, launcherShortcutId))
+    }
+
+    /** Hides the given installed app row (host or PWA). */
+    suspend fun hideApp(app: AppInfo) {
+        hideApp(
+                packageName = app.packageName,
+                profileKey = appProfileKey(app.userHandle),
+                launcherShortcutId = launcherShortcutIdForMetadata(app),
+        )
+    }
+
+    /** Unpins a launcher shortcut (PWA) from the system and refreshes the app cache. */
+    fun unpinLauncherShortcut(
+            packageName: String,
+            shortcutId: String,
+            userHandle: UserHandle? = null,
+    ): Boolean {
+        val launcherApps = launcherAppsOrNull() ?: return false
+        val user = userHandle ?: Process.myUserHandle()
+        return try {
+            val queryFlags =
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED or
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                LauncherApps.ShortcutQuery.FLAG_MATCH_CACHED
+                            } else {
+                                0
+                            }
+            val query =
+                    LauncherApps.ShortcutQuery()
+                            .setPackage(packageName)
+                            .setQueryFlags(queryFlags)
+            val remainingIds =
+                    launcherApps.getShortcuts(query, user).orEmpty().map { it.id }.filterNot {
+                        it == shortcutId
+                    }
+            launcherApps.pinShortcuts(packageName, remainingIds, user)
+            scheduleInstalledAppsRefresh()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // --- Renamed Apps (Room) ---
+
+    /** Returns a Flow of all renamed app entities. */
+    fun getAllRenamedApps(): Flow<List<RenamedAppEntity>> = appDao.getAllRenamedApps()
+
+    /** Renames an app with a custom display name. */
+    suspend fun renameApp(
+            packageName: String,
+            profileKey: String,
+            customName: String,
+            launcherShortcutId: String = HOST_APP_METADATA_SENTINEL,
+    ) {
+        appDao.renameApp(
+                RenamedAppEntity(
+                        packageName,
+                        profileKey,
+                        customName,
+                        launcherShortcutId,
+                )
+        )
+    }
+
+    /** Renames the given installed app row (host or PWA). */
+    suspend fun renameApp(app: AppInfo, customName: String) {
+        renameApp(
+                packageName = app.packageName,
+                profileKey = appProfileKey(app.userHandle),
+                customName = customName,
+                launcherShortcutId = launcherShortcutIdForMetadata(app),
+        )
+    }
+
+    /** Removes a custom app name (reverts to system name). */
+    suspend fun removeRename(
+            packageName: String,
+            profileKey: String,
+            launcherShortcutId: String,
+    ) {
+        appDao.removeRename(packageName, profileKey, launcherShortcutId)
+    }
+
+    // --- App Categories (Room) ---
+
+    /** Returns a Flow of all app category assignments. */
+    fun getAllAppCategories(): Flow<List<AppCategoryEntity>> =
+            appDao.getAllAppCategories().map { categories ->
+                categories.map { entity ->
+                    entity.copy(category = normalizeCategory(entity.category))
+                }
+            }
+
+    /** Assigns a category to an app. */
+    suspend fun setAppCategory(
+            packageName: String,
+            profileKey: String,
+            category: String,
+            launcherShortcutId: String = HOST_APP_METADATA_SENTINEL,
+    ) {
+        appDao.setAppCategory(
+                AppCategoryEntity(
+                        packageName,
+                        profileKey,
+                        normalizeCategory(category),
+                        launcherShortcutId,
+                )
+        )
+    }
+
+    /** Assigns a category to the given installed app row (host or PWA). */
+    suspend fun setAppCategory(app: AppInfo, category: String) {
+        setAppCategory(
+                packageName = app.packageName,
+                profileKey = appProfileKey(app.userHandle),
+                category = category,
+                launcherShortcutId = launcherShortcutIdForMetadata(app),
+        )
+    }
+
+    /** Returns a Flow of user-defined category names. */
+    fun getAllCategoryDefinitions(): Flow<List<AppCategoryDefinitionEntity>> =
+            appDao.getAllCategoryDefinitions().map { definitions ->
+                definitions.map { entity ->
+                    entity.copy(name = normalizeCategory(entity.name))
+                }.distinctBy { it.name.lowercase() }
+            }
+
+    /** Returns a Flow of suppressed category names (deleted by the user). */
+    fun getSuppressedCategoryDefinitions(): Flow<List<String>> =
+            appDao.getAllSuppressedCategoryDefinitions().map { entities ->
+                entities.map { normalizeCategory(it.name) }
+            }
+
+    /** Adds a user-defined category. */
+    suspend fun addCategoryDefinition(name: String): AddCategoryResult {
+        val normalized = normalizeCategory(name)
+        if (normalized.isBlank()) return AddCategoryResult.Failure.Blank
+        reservedCategoryAddFailure(context, normalized)?.let { return it }
+        val existing =
+                appDao.getAllCategoryDefinitions().first().any { entity ->
+                    normalizeCategory(entity.name).equals(normalized, ignoreCase = true)
+                }
+        if (existing) return AddCategoryResult.Failure.Duplicate(normalized)
+        val nextPosition = appDao.getMaxCategoryDefinitionPosition() + 1
+        appDao.upsertCategoryDefinition(
+                AppCategoryDefinitionEntity(name = normalized, position = nextPosition)
+        )
+        appDao.removeSuppressedCategoryDefinition(normalized)
+        return AddCategoryResult.Success
+    }
+
+    /** Renames a category across assignments and user-defined categories. */
+    suspend fun renameCategory(oldName: String, newName: String) {
+        val oldNormalized = normalizeCategory(oldName)
+        val newNormalized = normalizeCategory(newName)
+        if (oldNormalized.isBlank() || newNormalized.isBlank()) return
+        if (isProtectedCategoryName(oldNormalized) || isProtectedCategoryName(newNormalized)) return
+
+        val rawAssignments = appDao.getAllAppCategories().first()
+        rawAssignments.forEach { assignment ->
+            if (normalizeCategory(assignment.category).equals(oldNormalized, ignoreCase = true)) {
+                appDao.setAppCategory(
+                    AppCategoryEntity(
+                        packageName = assignment.packageName,
+                        profileKey = assignment.profileKey,
+                        category = newNormalized,
+                        launcherShortcutId = assignment.launcherShortcutId,
+                    )
+                )
+            }
+        }
+
+        appDao.renameCategoryAssignments(oldNormalized, newNormalized)
+        val previousPosition =
+                appDao.getAllCategoryDefinitions().first().firstOrNull { entity ->
+                    normalizeCategory(entity.name).equals(oldNormalized, ignoreCase = true)
+                }?.position
+        appDao.removeCategoryDefinition(oldNormalized)
+        val newPosition = previousPosition ?: (appDao.getMaxCategoryDefinitionPosition() + 1)
+        appDao.upsertCategoryDefinition(
+                AppCategoryDefinitionEntity(name = newNormalized, position = newPosition)
+        )
+        appDao.removeSuppressedCategoryDefinition(newNormalized)
+    }
+
+    /** Deletes a category and removes its app memberships. */
+    suspend fun deleteCategory(name: String) {
+        val normalized = normalizeCategory(name)
+        if (normalized.isBlank() || isProtectedCategoryName(normalized)) return
+
+        val storedAssignments = appDao.getAllAppCategories().first()
+
+        // Include apps whose category is only from system inference (no Room row); otherwise the
+        // chip/list entry comes back immediately after removing the definition.
+        val appsToUncategorize =
+                getInstalledApps().mapNotNull { app ->
+                    val effective =
+                            overlayCategory(app, storedAssignments)?.let(::normalizeCategory)
+                                    ?: normalizeCategory(app.category)
+                    if (effective.equals(normalized, ignoreCase = true)) {
+                        AppCategoryEntity(
+                            packageName = app.packageName,
+                            profileKey = appProfileKey(app.userHandle),
+                            category = "",
+                            launcherShortcutId = launcherShortcutIdForMetadata(app),
+                        )
+                    } else {
+                        null
+                    }
+                }
+
+        appDao.deleteCategoryWithAppResets(appsToUncategorize, normalized)
+    }
+
+    suspend fun reorderCategoryDefinitions(categories: List<String>) {
+        val normalized =
+                categories.asSequence()
+                        .map(::normalizeCategory)
+                        .filter { it.isNotBlank() }
+                        .filterNot { isProtectedCategoryName(it) }
+                        .distinct()
+                        .toList()
+        val entities = normalized.mapIndexed { index, name ->
+            AppCategoryDefinitionEntity(name = name, position = index)
+        }
+        appDao.replaceCategoryDefinitions(entities)
+    }
+
+    /** Clears all app-specific data (hidden apps, renamed apps, categories). */
+    suspend fun clearAllAppData() {
+        val defaults =
+                SystemCategoryKeys.defaultOrderedCategoryNames().mapIndexed { index, name ->
+                    AppCategoryDefinitionEntity(name = name, position = index)
+                }
+        appDao.resetAllAppData(defaults)
+    }
+
+    private fun registerPackageChangeReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        try {
+            context.registerBroadcastReceiverNotExported(packageChangeReceiver, filter)
+        } catch (_: Exception) {
+            // Unit tests may provide a mock Context that cannot register real receivers.
+        }
+    }
+
+    private fun registerProfileChangeReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_MANAGED_PROFILE_ADDED)
+            addAction(Intent.ACTION_MANAGED_PROFILE_REMOVED)
+        }
+        try {
+            context.registerBroadcastReceiverNotExported(profileChangeReceiver, filter)
+        } catch (_: Exception) {
+            // Unit tests may provide a mock Context that cannot register real receivers.
+        }
+    }
+
+    private fun registerLauncherAppsCallback() {
+        val launcherApps = launcherAppsOrNull() ?: return
+        try {
+            launcherApps.registerCallback(launcherAppsCallback, mainHandler)
+        } catch (_: Exception) {
+            // Unit tests may provide a mock LauncherApps that cannot register callbacks.
+        }
+    }
+
+    private fun inferCategoryFromApplicationInfo(applicationInfo: ApplicationInfo?): String {
+        return inferCategoryFromSystem(applicationInfo)
+                ?: SystemCategoryKeys.UTILITIES
+    }
+
+    private fun extractRemovedApp(intent: Intent): RemovedApp? {
+        val packageName = intent.data?.schemeSpecificPart?.takeIf { it.isNotBlank() } ?: return null
+        val profileKey = resolveRemovedProfileKey(packageName, extractUserHandle(intent))
+        return RemovedApp(packageName = packageName, profileKey = profileKey)
+    }
+
+    private fun resolveRemovedProfileKey(packageName: String, removedUser: UserHandle?): String {
+        if (removedUser != null && removedUser != Process.myUserHandle()) {
+            return appProfileKey(removedUser)
+        }
+        if (removedUser == Process.myUserHandle()) return "0"
+
+        val launcherApps = launcherAppsOrNull() ?: return "0"
+        val owner = Process.myUserHandle()
+        val inOwner = launcherApps.getActivityList(packageName, owner).isNotEmpty()
+        val privateProfile = privateSpaceManager.getPrivateSpaceProfile()
+        val inPrivate =
+                privateProfile != null &&
+                        launcherApps.getActivityList(packageName, privateProfile).isNotEmpty()
+        return when {
+            inPrivate && !inOwner && privateProfile != null -> appProfileKey(privateProfile)
+            else -> "0"
+        }
+    }
+
+    private fun extractUserHandle(intent: Intent): UserHandle? {
+        val extraUser =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_USER, UserHandle::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_USER) as? UserHandle
+                }
+        if (extraUser != null) return extraUser
+
+        val uid = intent.getIntExtra(Intent.EXTRA_UID, -1)
+        return if (uid >= 0) {
+            try {
+                UserHandle.getUserHandleForUid(uid)
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+    }
+
+    private fun inferCategoryFromSystem(applicationInfo: ApplicationInfo?): String? {
+        if (applicationInfo == null) return null
+        return when (applicationInfo.category) {
+            ApplicationInfo.CATEGORY_GAME -> SystemCategoryKeys.GAMES
+            ApplicationInfo.CATEGORY_PRODUCTIVITY -> SystemCategoryKeys.PRODUCTIVITY
+            ApplicationInfo.CATEGORY_SOCIAL -> SystemCategoryKeys.SOCIAL
+            ApplicationInfo.CATEGORY_AUDIO,
+            ApplicationInfo.CATEGORY_VIDEO,
+            ApplicationInfo.CATEGORY_IMAGE,
+            ApplicationInfo.CATEGORY_NEWS -> SystemCategoryKeys.MEDIA
+            else -> null
+        }
+    }
+
+    private fun normalizeCategory(category: String): String =
+            SystemCategoryKeys.normalize(context, category)
+
+    private companion object {
+        private const val TAG = "FokusAppLoad"
+        private const val LOAD_EMPTY_RETRY_COUNT = 2
+        private const val LOAD_EMPTY_RETRY_DELAY_MS = 150L
+        private const val INSTALLED_APPS_REFRESH_RETRY_DELAY_MS = 400L
+    }
+}
+
+data class RemovedApp(
+        val packageName: String,
+        val profileKey: String
+)

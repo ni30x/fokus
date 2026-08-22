@@ -1,0 +1,16 @@
+package nwd.fokuslauncher.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+val Black = Color(0xFF000000)
+val White = Color(0xFFFFFFFF)
+val LightGray = Color(0xFFB0B0B0)
+val DarkGray = Color(0xFF1A1A1A)
+val ChipBackground = Color(0xFF2A2A2A)
+val Transparent = Color.Transparent
+
+/** Error / delete / reset in Classic and for M3 surfaces that should stay readable. */
+val DestructiveRed = Color(0xFFFF5449)
+
+/** Brighter, saturated red for destructive actions when a neon visual preset is active (matches glow hues). */
+val NeonDestructiveRed = Color(0xFFFF3D4D)

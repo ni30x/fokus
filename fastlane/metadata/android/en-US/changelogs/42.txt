@@ -1,0 +1,13 @@
+Import custom TTF fonts from Settings.
+
+Deleted categories stay deleted for new installs.
+
+PWA category edits now work correctly.
+
+Fix a regression that made the keyboard open slower.
+
+Home widgets can now open shortcuts, instead of only apps.
+
+Include more icons.
+
+Updated French, Hungarian, Indonesian, Italian, Polish, Portuguese, Russian, Tamil, and Turkish via Weblate. Thanks to everyone who contributed.

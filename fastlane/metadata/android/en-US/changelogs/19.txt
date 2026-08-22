@@ -1,0 +1,5 @@
+Double tap empty space on the home screen to lock when enabled in settings (accessibility service required).
+Work profile apps have their own category in the drawer.
+Work profile shortcuts are supported.
+Default categories can now be removed.
+Smoother, snappier animations throughout the launcher.

@@ -1,0 +1,1257 @@
+package nwd.fokuslauncher.data.local
+
+import android.content.Context
+import android.os.UserHandle
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import nwd.fokuslauncher.data.model.DrawerAppSortMode
+import nwd.fokuslauncher.data.model.FavoriteApp
+import nwd.fokuslauncher.data.model.drawerOpenCountKey
+import nwd.fokuslauncher.data.model.LauncherFontPreferences
+import nwd.fokuslauncher.data.model.PhotoWallpaperDrawerOverlayIntensity
+import nwd.fokuslauncher.data.model.PhotoWallpaperOutlineWidthDp
+import nwd.fokuslauncher.data.model.LauncherFontScale
+import nwd.fokuslauncher.data.model.SystemCategoryKeys
+import nwd.fokuslauncher.data.model.HomeDateFormatStyle
+import nwd.fokuslauncher.data.model.CountdownEvent
+import nwd.fokuslauncher.data.model.HomeExtraWidgetEntry
+import nwd.fokuslauncher.data.model.HostedWidget
+import nwd.fokuslauncher.data.model.WorldClockCity
+import nwd.fokuslauncher.data.model.clampWorldClockCities
+import nwd.fokuslauncher.data.model.decodeWidgetTapTarget
+import nwd.fokuslauncher.data.model.encodeWidgetTapTarget
+import nwd.fokuslauncher.data.model.WidgetTapTarget
+import nwd.fokuslauncher.data.model.HomeAlignment
+import nwd.fokuslauncher.data.model.NotificationIndicatorColorPreset
+import nwd.fokuslauncher.data.model.NotificationIndicatorStyle
+import nwd.fokuslauncher.data.model.TemperatureUnit
+import nwd.fokuslauncher.data.model.LauncherAppearance
+import nwd.fokuslauncher.data.model.LauncherVisualStyle
+import nwd.fokuslauncher.data.model.DotSearchTargetMode
+import nwd.fokuslauncher.data.model.DotSearchTargetPreference
+import nwd.fokuslauncher.data.model.HomeShortcut
+import nwd.fokuslauncher.data.model.homeExtraHasCountdown
+import nwd.fokuslauncher.data.model.homeExtraWorldClockCount
+import nwd.fokuslauncher.data.model.moveHomeExtraWidget
+import nwd.fokuslauncher.data.model.normalizeCountdownEvents
+import nwd.fokuslauncher.data.model.parseCountdownEvents
+import nwd.fokuslauncher.data.model.parseHomeExtraWidgets
+import nwd.fokuslauncher.data.model.parseHostedWidgets
+import nwd.fokuslauncher.data.model.parseWorldClockCities
+import nwd.fokuslauncher.data.model.serializeCountdownEvents
+import nwd.fokuslauncher.data.model.serializeHomeExtraWidgets
+import nwd.fokuslauncher.data.model.serializeHostedWidgets
+import nwd.fokuslauncher.data.model.serializeWorldClockCities
+import nwd.fokuslauncher.data.model.ShortcutTarget
+import nwd.fokuslauncher.utils.WallpaperHelper
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** BCP-47 tag (e.g. en, pl). Empty = follow system. Shared with [AppLocaleHelper]. */
+internal val APP_LOCALE_TAG_KEY = stringPreferencesKey("app_locale_tag")
+
+data class HomeWidgetVisibility(
+        val showClock: Boolean,
+        val showDate: Boolean,
+        val showWeather: Boolean,
+        val showBattery: Boolean,
+)
+
+@Singleton
+class PreferencesManager @Inject constructor(@param:ApplicationContext private val context: Context) {
+
+    private fun <T> prefFlow(key: Preferences.Key<T>, default: T): Flow<T> =
+            context.fokusLauncherPreferencesDataStore.data.map { it[key] ?: default }
+
+    private suspend fun <T> setPref(key: Preferences.Key<T>, value: T) {
+        context.fokusLauncherPreferencesDataStore.edit { it[key] = value }
+    }
+
+    companion object {
+        private val FAVORITES_KEY = stringPreferencesKey("favorite_apps")
+        private val SWIPE_LEFT_KEY = stringPreferencesKey("swipe_left_app")
+        private val SWIPE_RIGHT_KEY = stringPreferencesKey("swipe_right_app")
+        private val RIGHT_SIDE_SHORTCUTS_KEY = stringPreferencesKey("right_side_shortcuts")
+        private val HOSTED_WIDGETS_KEY = stringPreferencesKey("hosted_widgets")
+        private val WORLD_CLOCK_CITIES_KEY = stringPreferencesKey("world_clock_cities")
+
+        private val COUNTDOWN_EVENT_KEY = stringPreferencesKey("countdown_event")
+        /** Ordered JSON array of home extra chip entries (cities + countdown). */
+        private val HOME_EXTRA_WIDGETS_KEY = stringPreferencesKey("home_extra_widgets")
+        /**
+         * Stored when the user has zero right-side shortcuts. Non-empty so the preference key stays
+         * written: some DataStore backends omit empty strings, which made [RIGHT_SIDE_SHORTCUTS_KEY]
+         * disappear and [ensureRightSideShortcutsInitialized] re-seed the default phone shortcut.
+         */
+        private const val RIGHT_SIDE_SHORTCUTS_EMPTY_MARKER = "__empty__"
+        private val PREFERRED_WEATHER_APP_KEY = stringPreferencesKey("preferred_weather_app")
+        /**
+         * Last coordinates used for the home weather widget when [android.location.LocationManager]
+         * has no current fix (e.g. GPS off). Format: `"latitude,longitude"` (decimal degrees).
+         */
+        private val LAST_WEATHER_LOCATION_KEY = stringPreferencesKey("last_weather_location")
+        private val PREFERRED_CLOCK_APP_KEY = stringPreferencesKey("preferred_clock_app")
+        private val PREFERRED_CALENDAR_APP_KEY = stringPreferencesKey("preferred_calendar_app")
+        private val SHOW_STATUS_BAR_KEY = booleanPreferencesKey("show_status_bar")
+        private val SHOW_HOME_CLOCK_KEY = booleanPreferencesKey("show_home_clock")
+        private val SHOW_HOME_DATE_KEY = booleanPreferencesKey("show_home_date")
+        private val HOME_DATE_FORMAT_STYLE_KEY = stringPreferencesKey("home_date_format_style")
+        private val TEMPERATURE_UNIT_KEY = stringPreferencesKey("temperature_unit")
+        private val SHOW_HOME_WEATHER_KEY = booleanPreferencesKey("show_home_weather")
+        /** Show current weather next to each world-clock city on home. */
+        private val SHOW_WORLD_CLOCK_WEATHER_KEY =
+                booleanPreferencesKey("show_world_clock_weather")
+        private val SHOW_HOME_BATTERY_KEY = booleanPreferencesKey("show_home_battery")
+        /** Opt-in media widget; off by default since no apps are registered yet. */
+        private val SHOW_HOME_MEDIA_KEY = booleanPreferencesKey("show_home_media")
+        private val SHOW_HOME_SCREEN_TIME_KEY = booleanPreferencesKey("show_home_screen_time")
+        /** Opt-in notification status indicators on home favorites and the app drawer. */
+        private val SHOW_NOTIFICATION_INDICATORS_KEY =
+                booleanPreferencesKey("show_notification_indicators")
+        private val NOTIFICATION_INDICATOR_STYLE_KEY =
+                stringPreferencesKey("notification_indicator_style")
+        private val NOTIFICATION_INDICATOR_COLOR_KEY =
+                intPreferencesKey("notification_indicator_color")
+        /** Package names of media apps the user registered for the widget to connect to. */
+        /** Vertical category sidebar in the drawer instead of chips + search bar. */
+        private val DRAWER_SIDEBAR_CATEGORIES_KEY =
+                booleanPreferencesKey("drawer_sidebar_categories")
+        /**
+         * When true, the vertical category rail is on the left. Default false = rail on the right
+         * (toward the edge users often reach with the thumb).
+         */
+        private val DRAWER_CATEGORY_SIDEBAR_ON_LEFT_KEY =
+                booleanPreferencesKey("drawer_category_sidebar_on_left")
+        private val DRAWER_SHOW_SCROLLBAR_KEY = booleanPreferencesKey("drawer_show_scrollbar")
+        /** JSON object: normalized category key → MinimalIcons name. */
+        private val DRAWER_CATEGORY_ICONS_KEY = stringPreferencesKey("drawer_category_icons")
+        private val DRAWER_APP_SORT_MODE_KEY = stringPreferencesKey("drawer_app_sort_mode")
+        /** JSON object: profile key string → JSON array of `drawerOpenCountKey` entries. */
+        private val DRAWER_CUSTOM_APP_ORDER_KEY = stringPreferencesKey("drawer_custom_app_order")
+        private val DRAWER_APP_OPEN_COUNTS_KEY = stringPreferencesKey("drawer_app_open_counts")
+        /** JSON: {"profileKey":"0","target":""} — empty/missing target = system default search. */
+        private val DRAWER_DOT_SEARCH_DEFAULT_KEY = stringPreferencesKey("drawer_dot_search_default")
+        /** JSON object: single-character key → {"profileKey":"0","target":"app:…"}. */
+        private val DRAWER_DOT_SEARCH_ALIASES_KEY = stringPreferencesKey("drawer_dot_search_aliases")
+        /** JSON object: [appProfileKey] string → user-visible profile section name override. */
+        private val PROFILE_DISPLAY_NAMES_KEY = stringPreferencesKey("profile_display_names")
+        /**
+         * When true (default), typing until only one app matches launches it automatically.
+         * When false, single-match search only filters the list; user taps or confirms to launch.
+         */
+        private val DRAWER_SEARCH_AUTO_LAUNCH_KEY =
+                booleanPreferencesKey("drawer_search_auto_launch")
+        private val DRAWER_SCROLL_TO_TOP_AUTO_KEYBOARD_KEY =
+                booleanPreferencesKey("drawer_scroll_to_top_auto_keyboard")
+        private val HAS_COMPLETED_ONBOARDING_KEY = booleanPreferencesKey("has_completed_onboarding")
+        private val ONBOARDING_REACHED_SET_DEFAULT_KEY = booleanPreferencesKey("onboarding_reached_set_default")
+        /**
+         * User completed the in-app prominent AccessibilityService disclosure (checkbox + continue).
+         * Required for Google Play User Data policy when [android.accessibilityservice] is declared.
+         */
+        private val ACCESSIBILITY_PROMINENT_DISCLOSURE_ACCEPTED_KEY =
+                booleanPreferencesKey("accessibility_prominent_disclosure_accepted")
+        private val HOME_ALIGNMENT_KEY = stringPreferencesKey("home_alignment")
+        private val LAUNCHER_VISUAL_STYLE_KEY = stringPreferencesKey("launcher_visual_style")
+        private val LAUNCHER_GLOW_ENABLED_KEY = booleanPreferencesKey("launcher_glow_enabled")
+        /**
+         * True after the user keeps or sets an image wallpaper; false after setting black wallpaper
+         * from the app. Default false so existing installs behave as before until they change
+         * wallpaper via Fokus.
+         */
+        private val HOME_USES_PHOTO_WALLPAPER_KEY =
+                booleanPreferencesKey("home_uses_photo_wallpaper")
+        /** Uniform stroke width in dp for home outlined text when a background image is used; 0 = defaults. */
+        private val PHOTO_WALLPAPER_OUTLINE_WIDTH_DP_KEY =
+                floatPreferencesKey("photo_wallpaper_outline_width_dp")
+        /** Multiplier for app-drawer scrim alpha over a busy / image wallpaper. */
+        private val PHOTO_WALLPAPER_DRAWER_OVERLAY_INTENSITY_KEY =
+                floatPreferencesKey("photo_wallpaper_drawer_overlay_intensity")
+        private val LAUNCHER_FONT_FAMILY_KEY = stringPreferencesKey("launcher_font_family")
+        private val LAUNCHER_CUSTOM_FONT_DISPLAY_NAME_KEY =
+                stringPreferencesKey("launcher_custom_font_display_name")
+        private val LAUNCHER_FONT_SCALE_KEY = floatPreferencesKey("launcher_font_scale")
+        private val ALLOW_LANDSCAPE_ROTATION_KEY =
+                booleanPreferencesKey("allow_landscape_rotation")
+        private val DOUBLE_TAP_EMPTY_LOCK_KEY =
+                booleanPreferencesKey("double_tap_empty_lock")
+        private val LONG_LOCK_RETURN_HOME_KEY =
+                booleanPreferencesKey("long_lock_return_home")
+        private val LONG_LOCK_RETURN_HOME_THRESHOLD_MINUTES_KEY =
+                intPreferencesKey("long_lock_return_home_threshold_minutes")
+        private val LONG_LOCK_LAST_SCREEN_OFF_AT_MS_KEY =
+                longPreferencesKey("long_lock_last_screen_off_at_ms")
+
+        const val DEFAULT_LONG_LOCK_RETURN_HOME_THRESHOLD_MINUTES = 15
+
+        /** Max length for custom profile display names (drawer sections, badges). */
+        const val MAX_PROFILE_DISPLAY_NAME_LENGTH = 40
+
+        /**
+         * Format: "label;packageName;iconName" entries separated by "|" Falls back to legacy
+         * "label:packageName" format when reading.
+         */
+        private const val DEFAULT_FAVORITES =
+                "Music;com.google.android.apps.youtube.music;music|" +
+                        "Work;com.google.android.gm;work|" +
+                        "Read;com.google.android.apps.docs;read|" +
+                        "Social;com.google.android.apps.messaging;chat|" +
+                        "Finance;com.android.vending;finance"
+    }
+
+    // --- Favorites ---
+
+    val favoritesFlow: Flow<List<FavoriteApp>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                val raw = prefs[FAVORITES_KEY] ?: DEFAULT_FAVORITES
+                parseFavorites(raw)
+            }
+
+    suspend fun setFavorites(favorites: List<FavoriteApp>) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            prefs[FAVORITES_KEY] =
+                    favorites.joinToString("|") {
+                        "${it.label};${it.packageName};${it.iconName};${it.iconPackage};${it.profileKey}"
+                    }
+        }
+    }
+
+    // --- Right-side shortcuts ---
+
+    val rightSideShortcutsFlow: Flow<List<HomeShortcut>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseRightSideShortcuts(prefs[RIGHT_SIDE_SHORTCUTS_KEY] ?: "")
+            }
+
+    suspend fun ensureRightSideShortcutsInitialized() {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (!prefs.contains(RIGHT_SIDE_SHORTCUTS_KEY)) {
+                val defaultShortcuts =
+                        listOf(
+                                HomeShortcut(
+                                        iconName = "call",
+                                        target = ShortcutTarget.PhoneDial,
+                                )
+                        )
+                prefs[RIGHT_SIDE_SHORTCUTS_KEY] = serializeRightSideShortcuts(defaultShortcuts)
+            }
+        }
+    }
+
+    /**
+     * Replaces hard-coded dialer package targets with [ShortcutTarget.PhoneDial] so the default
+     * dialer resolves via [android.content.Intent.ACTION_DIAL].
+     */
+    suspend fun migrateLegacyDialerShortcutTargets() {
+        val legacyDialerPackages =
+                setOf(
+                        "com.google.android.dialer",
+                        "com.android.dialer",
+                        "com.samsung.android.dialer",
+                        "com.oneplus.dialer",
+                )
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            prefs[RIGHT_SIDE_SHORTCUTS_KEY]?.let { raw ->
+                val list = parseRightSideShortcuts(raw)
+                val migrated =
+                        list.map { s ->
+                            if (s.target is ShortcutTarget.App &&
+                                            s.target.packageName in legacyDialerPackages
+                            ) {
+                                s.copy(target = ShortcutTarget.PhoneDial)
+                            } else s
+                        }
+                if (migrated != list) {
+                    prefs[RIGHT_SIDE_SHORTCUTS_KEY] = serializeRightSideShortcuts(migrated)
+                }
+            }
+
+            prefs[FAVORITES_KEY]?.let { raw ->
+                val favorites = parseFavorites(raw)
+                val migrated =
+                        favorites.map { fav ->
+                            if (fav.packageName in legacyDialerPackages && fav.iconPackage.isBlank()) {
+                                fav.copy(
+                                        packageName = ShortcutTarget.PHONE_FAVORITE_SENTINEL_PACKAGE,
+                                        iconPackage = ShortcutTarget.encode(ShortcutTarget.PhoneDial),
+                                )
+                            } else fav
+                        }
+                if (migrated != favorites) {
+                    prefs[FAVORITES_KEY] =
+                            migrated.joinToString("|") {
+                                "${it.label};${it.packageName};${it.iconName};${it.iconPackage};${it.profileKey}"
+                            }
+                }
+            }
+        }
+    }
+
+    suspend fun setRightSideShortcuts(shortcuts: List<HomeShortcut>) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            prefs[RIGHT_SIDE_SHORTCUTS_KEY] = serializeRightSideShortcuts(shortcuts)
+        }
+    }
+
+    // --- Android widget page ---
+
+    val hostedWidgetsFlow: Flow<List<HostedWidget>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseHostedWidgets(prefs[HOSTED_WIDGETS_KEY] ?: "")
+            }
+
+    suspend fun setHostedWidgets(widgets: List<HostedWidget>, allowEmpty: Boolean = false) {
+        if (widgets.isEmpty() && !allowEmpty) return
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (widgets.isEmpty()) prefs.remove(HOSTED_WIDGETS_KEY)
+            else prefs[HOSTED_WIDGETS_KEY] = serializeHostedWidgets(widgets)
+        }
+    }
+
+    // --- Swipe gestures ---
+
+    val swipeLeftTargetFlow: Flow<ShortcutTarget?> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                ShortcutTarget.decode(prefs[SWIPE_LEFT_KEY] ?: "")
+            }
+
+    val swipeRightTargetFlow: Flow<ShortcutTarget?> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                ShortcutTarget.decode(prefs[SWIPE_RIGHT_KEY] ?: "")
+            }
+
+    suspend fun setSwipeLeftTarget(target: ShortcutTarget?) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs -> prefs[SWIPE_LEFT_KEY] = ShortcutTarget.encode(target) }
+    }
+
+    suspend fun setSwipeRightTarget(target: ShortcutTarget?) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs -> prefs[SWIPE_RIGHT_KEY] = ShortcutTarget.encode(target) }
+    }
+
+    // --- Home widget tap targets (clock / calendar / weather) ---
+
+    val preferredWeatherTapFlow: Flow<WidgetTapTarget?> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                decodeWidgetTapTarget(prefs[PREFERRED_WEATHER_APP_KEY] ?: "")
+            }
+
+    suspend fun setPreferredWeatherTap(target: WidgetTapTarget?) =
+            setPref(PREFERRED_WEATHER_APP_KEY, encodeWidgetTapTarget(target))
+
+    suspend fun getLastKnownWeatherLocation(): Pair<Double, Double>? {
+        val raw =
+                context.fokusLauncherPreferencesDataStore.data
+                        .first()[LAST_WEATHER_LOCATION_KEY]
+                        ?: return null
+        val parts = raw.split(',')
+        if (parts.size != 2) return null
+        val lat = parts[0].toDoubleOrNull() ?: return null
+        val lon = parts[1].toDoubleOrNull() ?: return null
+        if (lat !in -90.0..90.0 || lon !in -180.0..180.0) return null
+        return lat to lon
+    }
+
+    suspend fun setLastKnownWeatherLocation(latitude: Double, longitude: Double) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            prefs[LAST_WEATHER_LOCATION_KEY] = "$latitude,$longitude"
+        }
+    }
+
+    val preferredClockTapFlow: Flow<WidgetTapTarget?> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                decodeWidgetTapTarget(prefs[PREFERRED_CLOCK_APP_KEY] ?: "")
+            }
+
+    suspend fun setPreferredClockTap(target: WidgetTapTarget?) =
+            setPref(PREFERRED_CLOCK_APP_KEY, encodeWidgetTapTarget(target))
+
+    val preferredCalendarTapFlow: Flow<WidgetTapTarget?> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                decodeWidgetTapTarget(prefs[PREFERRED_CALENDAR_APP_KEY] ?: "")
+            }
+
+    suspend fun setPreferredCalendarTap(target: WidgetTapTarget?) =
+            setPref(PREFERRED_CALENDAR_APP_KEY, encodeWidgetTapTarget(target))
+
+    // --- System UI ---
+
+    val showStatusBarFlow: Flow<Boolean> = prefFlow(SHOW_STATUS_BAR_KEY, false)
+    suspend fun setShowStatusBar(show: Boolean) = setPref(SHOW_STATUS_BAR_KEY, show)
+
+    val showHomeClockFlow: Flow<Boolean> = prefFlow(SHOW_HOME_CLOCK_KEY, true)
+    suspend fun setShowHomeClock(show: Boolean) = setPref(SHOW_HOME_CLOCK_KEY, show)
+
+    val showHomeDateFlow: Flow<Boolean> = prefFlow(SHOW_HOME_DATE_KEY, true)
+    suspend fun setShowHomeDate(show: Boolean) = setPref(SHOW_HOME_DATE_KEY, show)
+
+    val homeDateFormatStyleFlow: Flow<HomeDateFormatStyle> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                HomeDateFormatStyle.fromString(prefs[HOME_DATE_FORMAT_STYLE_KEY])
+            }
+
+    suspend fun setHomeDateFormatStyle(style: HomeDateFormatStyle) =
+            setPref(HOME_DATE_FORMAT_STYLE_KEY, style.name)
+
+    val temperatureUnitFlow: Flow<TemperatureUnit> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                TemperatureUnit.fromString(prefs[TEMPERATURE_UNIT_KEY])
+            }
+
+    suspend fun setTemperatureUnit(unit: TemperatureUnit) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (unit == TemperatureUnit.SYSTEM_DEFAULT) prefs.remove(TEMPERATURE_UNIT_KEY)
+            else prefs[TEMPERATURE_UNIT_KEY] = unit.name
+        }
+    }
+
+    val showHomeWeatherFlow: Flow<Boolean> = prefFlow(SHOW_HOME_WEATHER_KEY, true)
+    suspend fun setShowHomeWeather(show: Boolean) = setPref(SHOW_HOME_WEATHER_KEY, show)
+
+    val showWorldClockWeatherFlow: Flow<Boolean> = prefFlow(SHOW_WORLD_CLOCK_WEATHER_KEY, false)
+    suspend fun setShowWorldClockWeather(show: Boolean) =
+            setPref(SHOW_WORLD_CLOCK_WEATHER_KEY, show)
+
+    val showHomeBatteryFlow: Flow<Boolean> = prefFlow(SHOW_HOME_BATTERY_KEY, true)
+    suspend fun setShowHomeBattery(show: Boolean) = setPref(SHOW_HOME_BATTERY_KEY, show)
+
+    val showHomeMediaFlow: Flow<Boolean> = prefFlow(SHOW_HOME_MEDIA_KEY, false)
+    suspend fun setShowHomeMedia(show: Boolean) = setPref(SHOW_HOME_MEDIA_KEY, show)
+
+    val showHomeScreenTimeFlow: Flow<Boolean> = prefFlow(SHOW_HOME_SCREEN_TIME_KEY, false)
+    suspend fun setShowHomeScreenTime(show: Boolean) = setPref(SHOW_HOME_SCREEN_TIME_KEY, show)
+
+    val worldClockCitiesFlow: Flow<List<WorldClockCity>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseWorldClockCities(prefs[WORLD_CLOCK_CITIES_KEY] ?: "")
+            }
+
+    suspend fun setWorldClockCities(cities: List<WorldClockCity>) {
+        val clamped = clampWorldClockCities(cities)
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (clamped.isEmpty()) prefs.remove(WORLD_CLOCK_CITIES_KEY)
+            else prefs[WORLD_CLOCK_CITIES_KEY] = serializeWorldClockCities(clamped)
+        }
+    }
+
+    val countdownEventsFlow: Flow<List<CountdownEvent>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseCountdownEvents(prefs[COUNTDOWN_EVENT_KEY] ?: "")
+            }
+
+    suspend fun setCountdownEvents(events: List<CountdownEvent>) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val serialized = serializeCountdownEvents(events)
+            if (serialized.isEmpty()) prefs.remove(COUNTDOWN_EVENT_KEY)
+            else prefs[COUNTDOWN_EVENT_KEY] = serialized
+        }
+    }
+
+    /**
+     * Ordered extra home chips (each world-clock city + each countdown).
+     * Empty by default; add via Configure widgets. Legacy kind arrays are expanded
+     * using current city / countdown IDs when present.
+     */
+    val homeExtraWidgetsFlow: Flow<List<HomeExtraWidgetEntry>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                val cities = parseWorldClockCities(prefs[WORLD_CLOCK_CITIES_KEY] ?: "")
+                val events = parseCountdownEvents(prefs[COUNTDOWN_EVENT_KEY] ?: "")
+                parseHomeExtraWidgets(
+                        raw = prefs[HOME_EXTRA_WIDGETS_KEY] ?: "",
+                        legacyWorldClockCityIds = cities.map { it.id },
+                        legacyCountdownEventIds = events.map { it.id },
+                )
+            }
+
+    suspend fun setHomeExtraWidgets(entries: List<HomeExtraWidgetEntry>) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val serialized = serializeHomeExtraWidgets(entries)
+            if (serialized.isEmpty()) prefs.remove(HOME_EXTRA_WIDGETS_KEY)
+            else prefs[HOME_EXTRA_WIDGETS_KEY] = serialized
+        }
+    }
+
+    suspend fun addHomeExtraWorldClock(city: WorldClockCity) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val cities = parseWorldClockCities(prefs[WORLD_CLOCK_CITIES_KEY] ?: "")
+            val events = parseCountdownEvents(prefs[COUNTDOWN_EVENT_KEY] ?: "")
+            val nextCities = clampWorldClockCities(cities + city)
+            prefs[WORLD_CLOCK_CITIES_KEY] = serializeWorldClockCities(nextCities)
+            val current =
+                    parseHomeExtraWidgets(
+                            prefs[HOME_EXTRA_WIDGETS_KEY] ?: "",
+                            legacyWorldClockCityIds = cities.map { it.id },
+                            legacyCountdownEventIds = events.map { it.id },
+                    )
+            val entry = HomeExtraWidgetEntry.WorldClock(city.id)
+            if (current.any { it.stableKey == entry.stableKey }) return@edit
+            prefs[HOME_EXTRA_WIDGETS_KEY] = serializeHomeExtraWidgets(current + entry)
+        }
+    }
+
+    suspend fun addHomeExtraCountdown(event: CountdownEvent) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val cities = parseWorldClockCities(prefs[WORLD_CLOCK_CITIES_KEY] ?: "")
+            val events = parseCountdownEvents(prefs[COUNTDOWN_EVENT_KEY] ?: "")
+            val nextEvents = normalizeCountdownEvents(events + event)
+            prefs[COUNTDOWN_EVENT_KEY] = serializeCountdownEvents(nextEvents)
+            val current =
+                    parseHomeExtraWidgets(
+                            prefs[HOME_EXTRA_WIDGETS_KEY] ?: "",
+                            legacyWorldClockCityIds = cities.map { it.id },
+                            legacyCountdownEventIds = events.map { it.id },
+                    )
+            val entry = HomeExtraWidgetEntry.Countdown(event.id)
+            if (current.any { it.stableKey == entry.stableKey }) return@edit
+            prefs[HOME_EXTRA_WIDGETS_KEY] = serializeHomeExtraWidgets(current + entry)
+        }
+    }
+
+    suspend fun removeHomeExtraWidget(entry: HomeExtraWidgetEntry) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val cities = parseWorldClockCities(prefs[WORLD_CLOCK_CITIES_KEY] ?: "")
+            val events = parseCountdownEvents(prefs[COUNTDOWN_EVENT_KEY] ?: "")
+            val current =
+                    parseHomeExtraWidgets(
+                            prefs[HOME_EXTRA_WIDGETS_KEY] ?: "",
+                            legacyWorldClockCityIds = cities.map { it.id },
+                            legacyCountdownEventIds = events.map { it.id },
+                    )
+            val next = current.filterNot { it.stableKey == entry.stableKey }
+            if (next.isEmpty()) prefs.remove(HOME_EXTRA_WIDGETS_KEY)
+            else prefs[HOME_EXTRA_WIDGETS_KEY] = serializeHomeExtraWidgets(next)
+            when (entry) {
+                is HomeExtraWidgetEntry.WorldClock -> {
+                    val remainingCities = cities.filterNot { it.id == entry.cityId }
+                    if (remainingCities.isEmpty()) prefs.remove(WORLD_CLOCK_CITIES_KEY)
+                    else prefs[WORLD_CLOCK_CITIES_KEY] =
+                            serializeWorldClockCities(clampWorldClockCities(remainingCities))
+                }
+                is HomeExtraWidgetEntry.Countdown -> {
+                    val remainingEvents = events.filterNot { it.id == entry.eventId }
+                    if (remainingEvents.isEmpty()) prefs.remove(COUNTDOWN_EVENT_KEY)
+                    else prefs[COUNTDOWN_EVENT_KEY] = serializeCountdownEvents(remainingEvents)
+                }
+            }
+        }
+    }
+
+    suspend fun reorderHomeExtraWidget(from: Int, to: Int) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val cities = parseWorldClockCities(prefs[WORLD_CLOCK_CITIES_KEY] ?: "")
+            val events = parseCountdownEvents(prefs[COUNTDOWN_EVENT_KEY] ?: "")
+            val current =
+                    parseHomeExtraWidgets(
+                            prefs[HOME_EXTRA_WIDGETS_KEY] ?: "",
+                            legacyWorldClockCityIds = cities.map { it.id },
+                            legacyCountdownEventIds = events.map { it.id },
+                    )
+            val moved = moveHomeExtraWidget(current, from, to)
+            if (moved.isEmpty()) prefs.remove(HOME_EXTRA_WIDGETS_KEY)
+            else prefs[HOME_EXTRA_WIDGETS_KEY] = serializeHomeExtraWidgets(moved)
+        }
+    }
+
+    val showHomeWorldClockFlow: Flow<Boolean> =
+            homeExtraWidgetsFlow.map { homeExtraWorldClockCount(it) > 0 }
+
+    val showHomeCountdownFlow: Flow<Boolean> =
+            homeExtraWidgetsFlow.map { homeExtraHasCountdown(it) }
+
+    val showNotificationIndicatorsFlow: Flow<Boolean> =
+            prefFlow(SHOW_NOTIFICATION_INDICATORS_KEY, false)
+    suspend fun setShowNotificationIndicators(show: Boolean) =
+            setPref(SHOW_NOTIFICATION_INDICATORS_KEY, show)
+
+    val notificationIndicatorStyleFlow: Flow<NotificationIndicatorStyle> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                NotificationIndicatorStyle.fromString(prefs[NOTIFICATION_INDICATOR_STYLE_KEY])
+            }
+
+    suspend fun setNotificationIndicatorStyle(style: NotificationIndicatorStyle) =
+            setPref(NOTIFICATION_INDICATOR_STYLE_KEY, style.name)
+
+    val notificationIndicatorColorFlow: Flow<Int> =
+            prefFlow(NOTIFICATION_INDICATOR_COLOR_KEY, NotificationIndicatorColorPreset.DEFAULT.argb)
+
+    suspend fun setNotificationIndicatorColor(argb: Int) =
+            setPref(NOTIFICATION_INDICATOR_COLOR_KEY, argb)
+
+    val homeWidgetVisibilityFlow: Flow<HomeWidgetVisibility> =
+            combine(
+                    showHomeClockFlow,
+                    showHomeDateFlow,
+                    showHomeWeatherFlow,
+                    showHomeBatteryFlow,
+            ) { showClock, showDate, showWeather, showBattery ->
+                HomeWidgetVisibility(showClock, showDate, showWeather, showBattery)
+            }
+
+    val drawerSidebarCategoriesFlow: Flow<Boolean> =
+            prefFlow(DRAWER_SIDEBAR_CATEGORIES_KEY, false)
+    suspend fun setDrawerSidebarCategories(enabled: Boolean) =
+            setPref(DRAWER_SIDEBAR_CATEGORIES_KEY, enabled)
+
+    /** Per-[nwd.fokuslauncher.data.model.appProfileKey] display title for drawer sections and badges. */
+    val profileDisplayNameOverridesFlow: Flow<Map<String, String>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseProfileDisplayNames(prefs[PROFILE_DISPLAY_NAMES_KEY] ?: "")
+            }
+
+    suspend fun setProfileDisplayName(profileKey: String, displayName: String) {
+        val key = profileKey.trim().ifBlank { return }
+        val trimmed = displayName.trim()
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val current = parseProfileDisplayNames(prefs[PROFILE_DISPLAY_NAMES_KEY] ?: "").toMutableMap()
+            if (trimmed.isEmpty()) {
+                current.remove(key)
+            } else {
+                current[key] = trimmed.take(MAX_PROFILE_DISPLAY_NAME_LENGTH)
+            }
+            if (current.isEmpty()) prefs.remove(PROFILE_DISPLAY_NAMES_KEY)
+            else prefs[PROFILE_DISPLAY_NAMES_KEY] = serializeProfileDisplayNames(current)
+        }
+    }
+
+    val drawerCategorySidebarOnLeftFlow: Flow<Boolean> =
+            prefFlow(DRAWER_CATEGORY_SIDEBAR_ON_LEFT_KEY, false)
+    suspend fun setDrawerCategorySidebarOnLeft(onLeft: Boolean) =
+            setPref(DRAWER_CATEGORY_SIDEBAR_ON_LEFT_KEY, onLeft)
+
+    val drawerShowScrollbarFlow: Flow<Boolean> =
+            prefFlow(DRAWER_SHOW_SCROLLBAR_KEY, true)
+    suspend fun setDrawerShowScrollbar(show: Boolean) =
+            setPref(DRAWER_SHOW_SCROLLBAR_KEY, show)
+
+    val drawerCategoryIconsFlow: Flow<Map<String, String>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseDrawerCategoryIcons(prefs[DRAWER_CATEGORY_ICONS_KEY] ?: "")
+            }
+
+    suspend fun setDrawerCategoryIcon(rawCategory: String, iconName: String) {
+        val key = SystemCategoryKeys.normalize(context, rawCategory)
+        if (key.isBlank()) return
+        val icon = iconName.trim()
+        if (icon.isEmpty()) return
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val current = parseDrawerCategoryIcons(prefs[DRAWER_CATEGORY_ICONS_KEY] ?: "").toMutableMap()
+            current[key] = icon
+            prefs[DRAWER_CATEGORY_ICONS_KEY] = serializeDrawerCategoryIcons(current)
+        }
+    }
+
+    suspend fun clearDrawerCategoryIcon(rawCategory: String) {
+        val key = SystemCategoryKeys.normalize(context, rawCategory)
+        if (key.isBlank()) return
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val current = parseDrawerCategoryIcons(prefs[DRAWER_CATEGORY_ICONS_KEY] ?: "").toMutableMap()
+            current.remove(key)
+            if (current.isEmpty()) prefs.remove(DRAWER_CATEGORY_ICONS_KEY)
+            else prefs[DRAWER_CATEGORY_ICONS_KEY] = serializeDrawerCategoryIcons(current)
+        }
+    }
+
+    suspend fun renameDrawerCategoryIcon(oldName: String, newName: String) {
+        val oldKey = SystemCategoryKeys.normalize(context, oldName)
+        val newKey = SystemCategoryKeys.normalize(context, newName)
+        if (oldKey.isBlank() || newKey.isBlank() || oldKey == newKey) return
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val current = parseDrawerCategoryIcons(prefs[DRAWER_CATEGORY_ICONS_KEY] ?: "").toMutableMap()
+            val icon = current.remove(oldKey) ?: return@edit
+            current[newKey] = icon
+            if (current.isEmpty()) prefs.remove(DRAWER_CATEGORY_ICONS_KEY)
+            else prefs[DRAWER_CATEGORY_ICONS_KEY] = serializeDrawerCategoryIcons(current)
+        }
+    }
+
+    // --- App drawer sort & launch counts (drawer opens only) ---
+
+    val drawerAppSortModeFlow: Flow<DrawerAppSortMode> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                DrawerAppSortMode.fromStorage(prefs[DRAWER_APP_SORT_MODE_KEY])
+            }
+
+    suspend fun setDrawerAppSortMode(mode: DrawerAppSortMode) =
+            setPref(DRAWER_APP_SORT_MODE_KEY, mode.name)
+
+    val drawerCustomAppOrderFlow: Flow<Map<String, List<String>>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseDrawerCustomAppOrderJson(prefs[DRAWER_CUSTOM_APP_ORDER_KEY] ?: "")
+            }
+
+    suspend fun setDrawerCustomAppOrder(order: Map<String, List<String>>) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (order.isEmpty()) prefs.remove(DRAWER_CUSTOM_APP_ORDER_KEY)
+            else prefs[DRAWER_CUSTOM_APP_ORDER_KEY] = serializeDrawerCustomAppOrderJson(order)
+        }
+    }
+
+    // --- Drawer dot-search ---
+
+    val drawerDotSearchDefaultFlow: Flow<DotSearchTargetPreference> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseDrawerDotSearchTargetJson(prefs[DRAWER_DOT_SEARCH_DEFAULT_KEY] ?: "")
+                        ?: DotSearchTargetPreference()
+            }
+
+    val drawerDotSearchAliasesFlow: Flow<Map<Char, DotSearchTargetPreference>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseDrawerDotSearchAliasesJson(prefs[DRAWER_DOT_SEARCH_ALIASES_KEY] ?: "")
+            }
+
+    suspend fun setDrawerDotSearchDefault(config: DotSearchTargetPreference) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val encoded = serializeDrawerDotSearchTarget(config)
+            if (encoded.isEmpty()) prefs.remove(DRAWER_DOT_SEARCH_DEFAULT_KEY)
+            else prefs[DRAWER_DOT_SEARCH_DEFAULT_KEY] = encoded
+        }
+    }
+
+    suspend fun clearDrawerDotSearchDefault() {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            prefs.remove(DRAWER_DOT_SEARCH_DEFAULT_KEY)
+        }
+    }
+
+    suspend fun setDrawerDotSearchAlias(
+            alias: Char,
+            config: DotSearchTargetPreference,
+    ) {
+        val key = alias.lowercaseChar()
+        require(key in 'a'..'z') { "Alias must be a lowercase letter" }
+        require(config.target != null) { "Alias target is required" }
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val current =
+                    parseDrawerDotSearchAliasesJson(
+                                    prefs[DRAWER_DOT_SEARCH_ALIASES_KEY] ?: ""
+                            )
+                            .toMutableMap()
+            current[key] = config
+            prefs[DRAWER_DOT_SEARCH_ALIASES_KEY] = serializeDrawerDotSearchAliases(current)
+        }
+    }
+
+    suspend fun removeDrawerDotSearchAlias(alias: Char) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val current =
+                    parseDrawerDotSearchAliasesJson(
+                                    prefs[DRAWER_DOT_SEARCH_ALIASES_KEY] ?: ""
+                            )
+                            .toMutableMap()
+            current.remove(alias.lowercaseChar())
+            if (current.isEmpty()) prefs.remove(DRAWER_DOT_SEARCH_ALIASES_KEY)
+            else prefs[DRAWER_DOT_SEARCH_ALIASES_KEY] = serializeDrawerDotSearchAliases(current)
+        }
+    }
+
+    val drawerSearchAutoLaunchFlow: Flow<Boolean> =
+            prefFlow(DRAWER_SEARCH_AUTO_LAUNCH_KEY, true)
+    suspend fun setDrawerSearchAutoLaunch(enabled: Boolean) =
+            setPref(DRAWER_SEARCH_AUTO_LAUNCH_KEY, enabled)
+
+    val drawerScrollToTopAutoKeyboardFlow: Flow<Boolean> =
+            prefFlow(DRAWER_SCROLL_TO_TOP_AUTO_KEYBOARD_KEY, false)
+    suspend fun setDrawerScrollToTopAutoKeyboard(enabled: Boolean) =
+            setPref(DRAWER_SCROLL_TO_TOP_AUTO_KEYBOARD_KEY, enabled)
+
+    val drawerAppOpenCountsFlow: Flow<Map<String, Int>> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                parseDrawerOpenCounts(prefs[DRAWER_APP_OPEN_COUNTS_KEY] ?: "")
+            }
+
+    suspend fun recordDrawerAppOpen(packageName: String, userHandle: UserHandle?) {
+        val key = drawerOpenCountKey(packageName, userHandle)
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            val raw = prefs[DRAWER_APP_OPEN_COUNTS_KEY] ?: ""
+            val map = parseDrawerOpenCounts(raw).toMutableMap()
+            map[key] = (map[key] ?: 0) + 1
+            prefs[DRAWER_APP_OPEN_COUNTS_KEY] = serializeDrawerOpenCounts(map)
+        }
+    }
+
+    // --- Onboarding ---
+
+    val hasCompletedOnboardingFlow: Flow<Boolean> =
+            prefFlow(HAS_COMPLETED_ONBOARDING_KEY, false)
+
+    suspend fun setHasCompletedOnboarding(completed: Boolean) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            prefs[HAS_COMPLETED_ONBOARDING_KEY] = completed
+            if (completed) prefs.remove(ONBOARDING_REACHED_SET_DEFAULT_KEY)
+        }
+    }
+
+    suspend fun setOnboardingReachedSetDefault(reached: Boolean) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            prefs[ONBOARDING_REACHED_SET_DEFAULT_KEY] = reached
+        }
+    }
+
+    suspend fun getOnboardingReachedSetDefault(): Boolean {
+        return context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+            prefs[ONBOARDING_REACHED_SET_DEFAULT_KEY] ?: false
+        }.first()
+    }
+
+    val accessibilityProminentDisclosureAcceptedFlow: Flow<Boolean> =
+            prefFlow(ACCESSIBILITY_PROMINENT_DISCLOSURE_ACCEPTED_KEY, false)
+
+    suspend fun setAccessibilityProminentDisclosureAccepted(accepted: Boolean) {
+        setPref(ACCESSIBILITY_PROMINENT_DISCLOSURE_ACCEPTED_KEY, accepted)
+    }
+
+    // --- Home alignment ---
+
+    val homeAlignmentFlow: Flow<HomeAlignment> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                HomeAlignment.fromString(prefs[HOME_ALIGNMENT_KEY] ?: HomeAlignment.LEFT.name)
+            }
+
+    suspend fun setHomeAlignment(alignment: HomeAlignment) =
+            setPref(HOME_ALIGNMENT_KEY, alignment.name)
+
+    /**
+     * Color style and glow from a **single** preferences read so they never disagree between
+     * emissions (avoids brief wrong combinations from separate flows).
+     */
+    val launcherAppearanceFlow: Flow<LauncherAppearance> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                val visualStyle =
+                        LauncherVisualStyle.fromString(prefs[LAUNCHER_VISUAL_STYLE_KEY] ?: "")
+                val glowStored = prefs[LAUNCHER_GLOW_ENABLED_KEY]
+                val glowEnabled =
+                        if (glowStored != null) {
+                            glowStored == true
+                        } else {
+                            visualStyle != LauncherVisualStyle.CLASSIC
+                        }
+                val usesPhotoWallpaper = prefs[HOME_USES_PHOTO_WALLPAPER_KEY] == true
+                LauncherAppearance(
+                        visualStyle = visualStyle,
+                        glowEnabled = glowEnabled,
+                        usesPhotoWallpaper = usesPhotoWallpaper,
+                )
+            }
+
+    val launcherVisualStyleFlow: Flow<LauncherVisualStyle> =
+            launcherAppearanceFlow.map { it.visualStyle }
+
+    /**
+     * Text/icon glow when enabled. If the key was never written, defaults to **on** for non-Classic
+     * visual styles (migration) and **off** for Classic.
+     */
+    val launcherGlowEnabledFlow: Flow<Boolean> = launcherAppearanceFlow.map { it.glowEnabled }
+
+    suspend fun setLauncherVisualStyle(style: LauncherVisualStyle) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (style == LauncherVisualStyle.CLASSIC) prefs.remove(LAUNCHER_VISUAL_STYLE_KEY)
+            else prefs[LAUNCHER_VISUAL_STYLE_KEY] = style.name
+        }
+    }
+
+    suspend fun setLauncherGlowEnabled(enabled: Boolean) {
+        setPref(LAUNCHER_GLOW_ENABLED_KEY, enabled)
+    }
+
+    suspend fun setHomeUsesPhotoWallpaper(usesPhoto: Boolean) {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (usesPhoto) prefs[HOME_USES_PHOTO_WALLPAPER_KEY] = true
+            else prefs.remove(HOME_USES_PHOTO_WALLPAPER_KEY)
+        }
+    }
+
+    val photoWallpaperOutlineWidthDpFlow: Flow<Float> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                PhotoWallpaperOutlineWidthDp.fromStorage(
+                        prefs[PHOTO_WALLPAPER_OUTLINE_WIDTH_DP_KEY]
+                )
+            }
+
+    suspend fun setPhotoWallpaperOutlineWidthDp(widthDp: Float) {
+        val normalized = PhotoWallpaperOutlineWidthDp.snapToStep(widthDp)
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (normalized == PhotoWallpaperOutlineWidthDp.DEFAULT) {
+                prefs.remove(PHOTO_WALLPAPER_OUTLINE_WIDTH_DP_KEY)
+            } else {
+                prefs[PHOTO_WALLPAPER_OUTLINE_WIDTH_DP_KEY] = normalized
+            }
+        }
+    }
+
+    val photoWallpaperDrawerOverlayIntensityFlow: Flow<Float> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                PhotoWallpaperDrawerOverlayIntensity.fromStorage(
+                        prefs[PHOTO_WALLPAPER_DRAWER_OVERLAY_INTENSITY_KEY]
+                )
+            }
+
+    suspend fun setPhotoWallpaperDrawerOverlayIntensity(value: Float) {
+        val normalized = PhotoWallpaperDrawerOverlayIntensity.snapToStep(value)
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (normalized == PhotoWallpaperDrawerOverlayIntensity.DEFAULT) {
+                prefs.remove(PHOTO_WALLPAPER_DRAWER_OVERLAY_INTENSITY_KEY)
+            } else {
+                prefs[PHOTO_WALLPAPER_DRAWER_OVERLAY_INTENSITY_KEY] = normalized
+            }
+        }
+    }
+
+    /**
+     * Updates [HOME_USES_PHOTO_WALLPAPER_KEY] from the live system wallpaper so existing image
+     * wallpapers are detected without going through Fokus picker/onboarding.
+     * No-ops when the stored flag already matches, avoiding DataStore writes and theme
+     * recomposition on every resume (#168).
+     */
+    suspend fun syncHomeUsesPhotoWallpaperFromSystemWallpaper() {
+        val classification =
+                WallpaperHelper.homeWallpaperEffectivelyBlackOrNull(context) ?: return
+        val wantsPhoto = !classification
+        val currentPhoto =
+                context.fokusLauncherPreferencesDataStore.data.first()[HOME_USES_PHOTO_WALLPAPER_KEY] ==
+                        true
+        if (wantsPhoto == currentPhoto) return
+        setHomeUsesPhotoWallpaper(wantsPhoto)
+    }
+
+    // --- Launcher text (system fonts + scale) ---
+
+    val launcherFontFamilyFlow: Flow<String> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                LauncherFontPreferences.normalizeFontFamilyFromStorage(
+                        prefs[LAUNCHER_FONT_FAMILY_KEY]
+                )
+            }
+
+    suspend fun setLauncherFontFamilyName(familyName: String) {
+        val trimmed = familyName.trim()
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (trimmed.isEmpty()) prefs.remove(LAUNCHER_FONT_FAMILY_KEY)
+            else prefs[LAUNCHER_FONT_FAMILY_KEY] = trimmed
+        }
+    }
+
+    val launcherCustomFontDisplayNameFlow: Flow<String> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                prefs[LAUNCHER_CUSTOM_FONT_DISPLAY_NAME_KEY]?.trim().orEmpty()
+            }
+
+    suspend fun setLauncherCustomFontDisplayName(displayName: String) {
+        val trimmed = displayName.trim()
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (trimmed.isEmpty()) {
+                prefs.remove(LAUNCHER_CUSTOM_FONT_DISPLAY_NAME_KEY)
+            } else {
+                prefs[LAUNCHER_CUSTOM_FONT_DISPLAY_NAME_KEY] = trimmed
+            }
+        }
+    }
+
+    suspend fun clearLauncherCustomFontDisplayName() {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            prefs.remove(LAUNCHER_CUSTOM_FONT_DISPLAY_NAME_KEY)
+        }
+    }
+
+    val launcherFontScaleFlow: Flow<Float> =
+            context.fokusLauncherPreferencesDataStore.data.map { prefs ->
+                LauncherFontScale.fromStorage(prefs[LAUNCHER_FONT_SCALE_KEY])
+            }
+
+    suspend fun setLauncherFontScale(scale: Float) {
+        val normalized = LauncherFontScale.snapToStep(scale)
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (normalized == LauncherFontScale.DEFAULT) {
+                prefs.remove(LAUNCHER_FONT_SCALE_KEY)
+            } else {
+                prefs[LAUNCHER_FONT_SCALE_KEY] = normalized
+            }
+        }
+    }
+
+    // --- App language (per-app locale) ---
+
+    val appLocaleTagFlow: Flow<String> = prefFlow(APP_LOCALE_TAG_KEY, "")
+
+    suspend fun setAppLocaleTag(tag: String) {
+        val trimmed = tag.trim()
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            if (trimmed.isEmpty()) prefs.remove(APP_LOCALE_TAG_KEY)
+            else prefs[APP_LOCALE_TAG_KEY] = trimmed
+        }
+    }
+
+    // --- Screen rotation ---
+
+    val allowLandscapeRotationFlow: Flow<Boolean> =
+            prefFlow(ALLOW_LANDSCAPE_ROTATION_KEY, false)
+    suspend fun setAllowLandscapeRotation(allow: Boolean) =
+            setPref(ALLOW_LANDSCAPE_ROTATION_KEY, allow)
+
+    val doubleTapEmptyLockFlow: Flow<Boolean> = prefFlow(DOUBLE_TAP_EMPTY_LOCK_KEY, false)
+    suspend fun setDoubleTapEmptyLock(enabled: Boolean) =
+            setPref(DOUBLE_TAP_EMPTY_LOCK_KEY, enabled)
+
+    val longLockReturnHomeFlow: Flow<Boolean> = prefFlow(LONG_LOCK_RETURN_HOME_KEY, false)
+    suspend fun setLongLockReturnHome(enabled: Boolean) =
+            setPref(LONG_LOCK_RETURN_HOME_KEY, enabled)
+
+    val longLockReturnHomeThresholdMinutesFlow: Flow<Int> =
+            prefFlow(
+                    LONG_LOCK_RETURN_HOME_THRESHOLD_MINUTES_KEY,
+                    DEFAULT_LONG_LOCK_RETURN_HOME_THRESHOLD_MINUTES,
+            )
+    suspend fun setLongLockReturnHomeThresholdMinutes(minutes: Int) =
+            setPref(LONG_LOCK_RETURN_HOME_THRESHOLD_MINUTES_KEY, minutes)
+
+    val longLockLastScreenOffAtMsFlow: Flow<Long> =
+            prefFlow(LONG_LOCK_LAST_SCREEN_OFF_AT_MS_KEY, 0L)
+    suspend fun setLongLockLastScreenOffAtMs(timestampMs: Long) =
+            setPref(LONG_LOCK_LAST_SCREEN_OFF_AT_MS_KEY, timestampMs)
+
+    suspend fun clearLongLockLastScreenOffAtMs() {
+        context.fokusLauncherPreferencesDataStore.edit { prefs ->
+            prefs.remove(LONG_LOCK_LAST_SCREEN_OFF_AT_MS_KEY)
+        }
+    }
+
+    suspend fun getLongLockReturnHomeEnabled(): Boolean = longLockReturnHomeFlow.first()
+
+    suspend fun getLongLockReturnHomeThresholdMinutes(): Int =
+            longLockReturnHomeThresholdMinutesFlow.first()
+
+    suspend fun getLongLockLastScreenOffAtMs(): Long = longLockLastScreenOffAtMsFlow.first()
+
+    /** Clears all preferences, equivalent to clearing app storage. */
+    suspend fun clearAll() {
+        context.fokusLauncherPreferencesDataStore.edit { prefs -> prefs.clear() }
+    }
+
+    // --- Parsing ---
+
+    private fun parseFavorites(raw: String): List<FavoriteApp> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split("|").mapNotNull { entry ->
+            // New format: "label;packageName;iconName;iconPackage"
+            val semiParts = entry.split(";")
+            if (semiParts.size >= 3) {
+                FavoriteApp(
+                        label = semiParts[0],
+                        packageName = semiParts[1],
+                        iconName = semiParts[2],
+                        iconPackage = semiParts.getOrElse(3) { "" },
+                        profileKey = semiParts.getOrElse(4) { "0" },
+                )
+            } else {
+                // Legacy format: "label:packageName"
+                val colonParts = entry.split(":", limit = 2)
+                if (colonParts.size == 2) {
+                    FavoriteApp(
+                            label = colonParts[0],
+                            packageName = colonParts[1],
+                            iconName = "circle"
+                    )
+                } else null
+            }
+        }
+    }
+
+    private fun parseRightSideShortcuts(raw: String): List<HomeShortcut> {
+        if (raw.isBlank() || raw == RIGHT_SIDE_SHORTCUTS_EMPTY_MARKER) return emptyList()
+        return raw.split("|").mapNotNull { entry ->
+            val parts = entry.split(";")
+            if (parts.size < 2) return@mapNotNull null
+            val iconName = parts[0].ifBlank { "circle" }
+            val target = ShortcutTarget.decode(parts[1]) ?: return@mapNotNull null
+            val profileKey = parts.getOrElse(2) { "0" }.ifBlank { "0" }
+            HomeShortcut(iconName = iconName, target = target, profileKey = profileKey)
+        }
+    }
+
+    private fun serializeRightSideShortcuts(shortcuts: List<HomeShortcut>): String {
+        if (shortcuts.isEmpty()) return RIGHT_SIDE_SHORTCUTS_EMPTY_MARKER
+        return shortcuts.joinToString("|") { shortcut ->
+            "${shortcut.iconName};${ShortcutTarget.encode(shortcut.target)};${shortcut.profileKey}"
+        }
+    }
+
+    private fun parseDrawerOpenCounts(raw: String): Map<String, Int> {
+        if (raw.isBlank()) return emptyMap()
+        return raw.split(";").mapNotNull { entry ->
+            val parts = entry.split("|")
+            if (parts.size != 3) return@mapNotNull null
+            val count = parts[2].toIntOrNull() ?: return@mapNotNull null
+            "${parts[0]}|${parts[1]}" to count
+        }.toMap()
+    }
+
+    private fun serializeDrawerOpenCounts(map: Map<String, Int>): String {
+        if (map.isEmpty()) return ""
+        return map.entries.joinToString(";") { (key, count) ->
+            val parts = key.split("|")
+            "${parts[0]}|${parts[1]}|$count"
+        }
+    }
+
+    private fun parseDrawerCategoryIcons(raw: String): Map<String, String> {
+        if (raw.isBlank()) return emptyMap()
+        return runCatching {
+            val o = JSONObject(raw)
+            buildMap {
+                val it = o.keys()
+                while (it.hasNext()) {
+                    val k = it.next()
+                    val v = o.optString(k, "")
+                    if (k.isNotBlank() && v.isNotBlank()) put(k, v)
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun serializeDrawerCategoryIcons(map: Map<String, String>): String {
+        if (map.isEmpty()) return ""
+        val o = JSONObject()
+        map.entries.sortedBy { it.key }.forEach { (k, v) -> o.put(k, v) }
+        return o.toString()
+    }
+
+    private fun parseProfileDisplayNames(raw: String): Map<String, String> {
+        if (raw.isBlank()) return emptyMap()
+        return runCatching {
+            val o = JSONObject(raw)
+            buildMap {
+                val it = o.keys()
+                while (it.hasNext()) {
+                    val k = it.next()
+                    val v = o.optString(k, "")
+                    if (k.isNotBlank() && v.isNotBlank()) put(k, v.take(MAX_PROFILE_DISPLAY_NAME_LENGTH))
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun serializeProfileDisplayNames(map: Map<String, String>): String {
+        if (map.isEmpty()) return ""
+        val o = JSONObject()
+        map.entries.sortedBy { it.key }.forEach { (k, v) ->
+            val trimmed = v.trim().take(MAX_PROFILE_DISPLAY_NAME_LENGTH)
+            if (k.isNotBlank() && trimmed.isNotEmpty()) o.put(k, trimmed)
+        }
+        return o.toString()
+    }
+
+    private fun parseDrawerDotSearchTargetJson(raw: String): DotSearchTargetPreference? {
+        if (raw.isBlank()) return null
+        return runCatching {
+            val o = JSONObject(raw)
+            val profileKey = o.optString("profileKey", "0").ifBlank { "0" }
+            val targetRaw = o.optString("target", "")
+            val target =
+                    if (targetRaw.isBlank()) null else ShortcutTarget.decode(targetRaw) ?: return null
+            DotSearchTargetPreference(
+                    profileKey = profileKey,
+                    target = target,
+                    mode = parseDotSearchTargetMode(o.optString("mode", ""))
+            )
+        }.getOrNull()
+    }
+
+    private fun serializeDrawerDotSearchTarget(config: DotSearchTargetPreference): String {
+        if (config.target == null &&
+                        config.profileKey == "0" &&
+                        config.mode == DotSearchTargetMode.SEARCH
+        ) return ""
+        val o = JSONObject()
+        o.put("profileKey", config.profileKey.ifBlank { "0" })
+        o.put("target", if (config.target == null) "" else ShortcutTarget.encode(config.target))
+        o.put("mode", config.mode.name.lowercase())
+        return o.toString()
+    }
+
+    private fun parseDrawerDotSearchAliasesJson(raw: String): Map<Char, DotSearchTargetPreference> {
+        if (raw.isBlank()) return emptyMap()
+        return runCatching {
+            val root = JSONObject(raw)
+            buildMap {
+                val keys = root.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    if (k.length != 1) continue
+                    val keyChar = k.single().lowercaseChar()
+                    if (keyChar !in 'a'..'z') continue
+                    val inner = root.optJSONObject(k) ?: continue
+                    val profileKey = inner.optString("profileKey", "0").ifBlank { "0" }
+                    val targetRaw = inner.optString("target", "")
+                    val target = ShortcutTarget.decode(targetRaw) ?: continue
+                    put(
+                            keyChar,
+                            DotSearchTargetPreference(
+                                    profileKey,
+                                    target,
+                                    parseDotSearchTargetMode(inner.optString("mode", ""))
+                            )
+                    )
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun serializeDrawerDotSearchAliases(map: Map<Char, DotSearchTargetPreference>): String {
+        if (map.isEmpty()) return ""
+        val o = JSONObject()
+        map.entries.sortedBy { it.key }.forEach { (ch, pref) ->
+            val inner = JSONObject()
+            inner.put("profileKey", pref.profileKey.ifBlank { "0" })
+            inner.put("target", ShortcutTarget.encode(pref.target))
+            inner.put("mode", pref.mode.name.lowercase())
+            o.put(ch.lowercaseChar().toString(), inner)
+        }
+        return o.toString()
+    }
+
+    private fun parseDotSearchTargetMode(raw: String): DotSearchTargetMode =
+            when (raw.trim().uppercase()) {
+                DotSearchTargetMode.SHORTCUT.name -> DotSearchTargetMode.SHORTCUT
+                else -> DotSearchTargetMode.SEARCH
+            }
+
+    private fun parseDrawerCustomAppOrderJson(raw: String): Map<String, List<String>> {
+        if (raw.isBlank()) return emptyMap()
+        return runCatching {
+            val o = JSONObject(raw)
+            buildMap {
+                val keys = o.keys()
+                while (keys.hasNext()) {
+                    val profileKey = keys.next()
+                    val arr = o.optJSONArray(profileKey) ?: continue
+                    val entries = buildList {
+                        for (i in 0 until arr.length()) {
+                            val s = arr.optString(i, "").ifBlank { continue }
+                            add(s)
+                        }
+                    }
+                    if (entries.isNotEmpty()) put(profileKey, entries)
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun serializeDrawerCustomAppOrderJson(map: Map<String, List<String>>): String {
+        val o = JSONObject()
+        map.entries.sortedBy { it.key }.forEach { (profileKey, keys) ->
+            o.put(profileKey, JSONArray(keys))
+        }
+        return o.toString()
+    }
+}

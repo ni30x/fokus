@@ -1,0 +1,9 @@
+Smoother home and app list on slower devices.
+
+Faster, more reliable drawer search keyboard.
+
+Revert to firmer pull-down to close the app drawer.
+
+Hide Archived Apps settings on Android 14 and lower.
+
+Updated French, Italian, and Polish via Weblate. Thanks to everyone who contributed.

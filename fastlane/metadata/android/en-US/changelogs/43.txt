@@ -1,0 +1,15 @@
+Now-playing media widget with play/pause, skip, and like/save on home.
+
+Optional 24h screen-on time under weather; tap opens Digital Wellbeing.
+
+More responsive swipe gestures on home, drawer, and widget pages.
+
+Search all apps in sidebar category mode.
+
+Fix unremovable home apps.
+
+Hide Private Space lock when no profile is set up.
+
+Support archived apps.
+
+Updated Basque, Finnish, French, Hungarian, Italian, Polish, Russian, and Turkish via Weblate. Thanks to everyone who contributed.

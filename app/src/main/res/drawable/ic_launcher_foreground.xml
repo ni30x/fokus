@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Black ring: outer circle with inner cutout -->
+    <path
+        android:fillColor="#000000"
+        android:fillType="evenOdd"
+        android:pathData="M54,26
+            A28,28 0 0,1 82,54
+            A28,28 0 0,1 54,82
+            A28,28 0 0,1 26,54
+            A28,28 0 0,1 54,26
+            M54,38
+            A16,16 0 0,0 38,54
+            A16,16 0 0,0 54,70
+            A16,16 0 0,0 70,54
+            A16,16 0 0,0 54,38" />
+    <!-- Black center dot - focus point -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M54,47
+            A7,7 0 0,1 61,54
+            A7,7 0 0,1 54,61
+            A7,7 0 0,1 47,54
+            A7,7 0 0,1 54,47"
+        android:fillType="nonZero" />
+</vector>

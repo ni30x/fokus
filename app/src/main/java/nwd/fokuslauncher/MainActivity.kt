@@ -1,0 +1,194 @@
+package nwd.fokuslauncher
+
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.os.Build
+import android.os.Bundle
+import android.view.View
+import androidx.activity.compose.setContent
+import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import nwd.fokuslauncher.data.font.CustomFontStore
+import nwd.fokuslauncher.data.local.PreferencesManager
+import nwd.fokuslauncher.data.model.LauncherFontScale
+import nwd.fokuslauncher.data.model.LauncherAppearance
+import nwd.fokuslauncher.data.model.LauncherVisualStyle
+import nwd.fokuslauncher.data.repository.AppRepository
+import nwd.fokuslauncher.ui.navigation.FokusNavGraph
+import nwd.fokuslauncher.ui.navigation.LauncherHomeCoordinatorViewModel
+import nwd.fokuslauncher.ui.theme.FokusLauncherTheme
+import nwd.fokuslauncher.ui.util.ProvideAppLocale
+import nwd.fokuslauncher.ui.theme.composeFontFamilyFromStoredName
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+
+@AndroidEntryPoint
+class MainActivity : AppCompatActivity() {
+
+    @Inject
+    lateinit var preferencesManager: PreferencesManager
+
+    @Inject
+    lateinit var appRepository: AppRepository
+
+    @Inject
+    lateinit var customFontStore: CustomFontStore
+
+    private val launcherHomeCoordinator: LauncherHomeCoordinatorViewModel by viewModels()
+
+    private var shouldShowStatusBar: Boolean = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        applyLauncherScreenOrientation(allowLandscape = false)
+
+        // Preload apps in background to warm up cache
+        lifecycleScope.launch(Dispatchers.IO) {
+            appRepository.getInstalledAppsOnBackground()
+        }
+
+        enableEdgeToEdge()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        window.decorView.isSoundEffectsEnabled = true
+        window.decorView.overScrollMode = View.OVER_SCROLL_NEVER
+        applySystemBarsAppearance()
+        lifecycleScope.launch {
+            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+                withContext(Dispatchers.IO) {
+                    preferencesManager.syncHomeUsesPhotoWallpaperFromSystemWallpaper()
+                }
+                launch {
+                    preferencesManager.showStatusBarFlow.collect { showStatusBar ->
+                        shouldShowStatusBar = showStatusBar
+                        applySystemBarsAppearance()
+                    }
+                }
+                launch {
+                    preferencesManager.allowLandscapeRotationFlow.collect { allowLandscape ->
+                        applyLauncherScreenOrientation(allowLandscape)
+                    }
+                }
+            }
+        }
+        setContent {
+            val launcherFontFamilyName by produceState("") {
+                preferencesManager.launcherFontFamilyFlow.collect { value = it }
+            }
+            val launcherFontScale by produceState(LauncherFontScale.DEFAULT) {
+                preferencesManager.launcherFontScaleFlow.collect { value = it }
+            }
+            val launcherAppearance by produceState(
+                    LauncherAppearance(
+                            visualStyle = LauncherVisualStyle.CLASSIC,
+                            glowEnabled = false,
+                    )
+            ) {
+                preferencesManager.launcherAppearanceFlow.collect { value = it }
+            }
+            val appLocaleTag by produceState("") {
+                preferencesManager.appLocaleTagFlow.collect { value = it }
+            }
+            ProvideAppLocale(localeTag = appLocaleTag) {
+                val wallpaperIsPhoto = launcherAppearance.usesPhotoWallpaper
+                FokusLauncherTheme(
+                        fontFamily =
+                                composeFontFamilyFromStoredName(launcherFontFamilyName) {
+                                    customFontStore.resolveFile(it)
+                                },
+                        fontScale = launcherFontScale,
+                        visualStyle =
+                                if (wallpaperIsPhoto) LauncherVisualStyle.CLASSIC
+                                else launcherAppearance.visualStyle,
+                        glowEnabled = launcherAppearance.glowEnabled && !wallpaperIsPhoto,
+                ) {
+                    FokusNavGraph()
+                }
+            }
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) {
+            lifecycleScope.launch {
+                val hasCompleted = preferencesManager.hasCompletedOnboardingFlow.first()
+                if (hasCompleted) {
+                    setIntent(intent)
+                    launcherHomeCoordinator.requestGoHome()
+                } else {
+                    setIntent(Intent(this@MainActivity, MainActivity::class.java))
+                }
+            }
+        } else {
+            setIntent(intent)
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) applySystemBarsAppearance()
+    }
+
+    private fun applySystemBarsAppearance() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            if (shouldShowStatusBar) {
+                show(WindowInsetsCompat.Type.statusBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            } else {
+                hide(WindowInsetsCompat.Type.statusBars())
+                systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+            show(WindowInsetsCompat.Type.navigationBars())
+        }
+    }
+
+    private fun applyLauncherScreenOrientation(allowLandscape: Boolean) {
+        requestedOrientation =
+                if (allowLandscape) ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                else ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+    }
+
+    companion object {
+        /**
+         * Expands the notification shade via StatusBarManager.
+         * Fallback: show status bar so user can swipe from top.
+         */
+        fun expandStatusBar(context: Context) {
+            try {
+                val statusBarManager = context.getSystemService("statusbar")
+                val clazz = Class.forName("android.app.StatusBarManager")
+                val method = clazz.getMethod("expandNotificationsPanel")
+
+                method.invoke(statusBarManager)
+                return
+            } catch (_: Exception) { }
+            (context as? Activity)?.let { activity ->
+                WindowInsetsControllerCompat(activity.window, activity.window.decorView)
+                    .show(WindowInsetsCompat.Type.statusBars())
+            }
+        }
+    }
+}

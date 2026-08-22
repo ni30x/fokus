@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Special drawer categories: English keys live in ReservedCategoryNames.kt; translate these for UI. -->
+    <string name="drawer_filter_all_apps">Alle Apps</string>
+    <string name="drawer_filter_private">Privat</string>
+    <string name="drawer_filter_work">Arbeit</string>
+    <string name="drawer_filter_uncategorized">Ohne Kategorie</string>
+    <string name="drawer_menu_launcher_settings">Launcher-Einstellungen</string>
+    <string name="drawer_private_space_lock">Privaten Bereich sperren</string>
+    <string name="drawer_private_space_unlock">Privaten Bereich entsperren</string>
+    <!-- App drawer: one section per Android user profile -->
+    <string name="drawer_section_personal">Persönlich</string>
+    <string name="drawer_section_work_profile">Arbeitsprofil</string>
+    <string name="drawer_section_profile_numbered">Profil %1$d</string>
+    <string name="drawer_section_other_profile">Anderes Profil</string>
+    <string name="drawer_section_clone_profile">Parallele Apps</string>
+    <string name="drawer_section_private_space">Privater Bereich</string>
+    <!-- Search -->
+    <string name="search">Suchen</string>
+    <string name="search_apps">Apps suchen</string>
+    <string name="search_apps_and_actions">Apps und Aktionen suchen</string>
+    <!-- Common actions -->
+    <string name="action_back">Zurück</string>
+    <string name="action_done">Fertig</string>
+    <string name="action_cancel">Abbrechen</string>
+    <string name="action_save">Speichern</string>
+    <string name="action_add">Hinzufügen</string>
+    <string name="action_rename">Umbenennen</string>
+    <string name="action_change">Ändern</string>
+    <string name="action_clear">Leeren</string>
+    <string name="action_reset">Zurücksetzen</string>
+    <string name="cd_drag_to_reorder">Zum Neuanordnen ziehen</string>
+    <string name="cd_change_icon">Symbol ändern</string>
+    <string name="cd_shortcut_icon">Schnellzugriffssymbol</string>
+    <string name="cd_edit_home_screen">Startbildschirm bearbeiten</string>
+    <string name="cd_settings">Einstellungen</string>
+    <string name="cd_menu">Menü</string>
+    <string name="cd_open_link">Link öffnen</string>
+    <string name="cd_unhide_app">App einblenden</string>
+    <string name="cd_remove_rename">Umbenennung entfernen</string>
+    <string name="cd_delete_category">Kategorie löschen</string>
+    <!-- Shortcut / target labels -->
+    <string name="shortcut_target_not_set">Nicht festgelegt</string>
+    <string name="shortcut_target_deep_link">Deep Link</string>
+    <string name="shortcut_target_app_with_label">%1$s - %2$s</string>
+    <string name="shortcut_open_app">App öffnen</string>
+    <string name="shortcut_generic_label">Schnellzugriff</string>
+    <string name="toast_weather_app_launch_failed">Die ausgewählte Wetter-App konnte nicht gestartet werden</string>
+    <!-- App & category sheets -->
+    <string name="app_name_placeholder">App-Name</string>
+    <string name="action_add_to_home">Zum Startbildschirm hinzufügen</string>
+    <string name="action_remove_from_home">Vom Startbildschirm entfernen</string>
+    <string name="action_app_info">App-Info</string>
+    <string name="action_hide">Ausblenden</string>
+    <string name="action_uninstall">Deinstallieren</string>
+    <string name="category_name_label">Kategoriename</string>
+    <string name="category_action_rename">Umbenennen</string>
+    <string name="category_action_edit_apps">Apps in Kategorie bearbeiten</string>
+    <string name="category_action_remove">Kategorie entfernen</string>
+    <string name="category_icon_picker_title">Kategorie-Symbol</string>
+    <string name="category_action_reset_icon">Standard-Symbol wiederherstellen</string>
+    <string name="category_apps_screen_section_in_category">Apps in dieser Kategorie</string>
+    <string name="category_no_category">Keine Kategorie</string>
+    <string name="category_settings_title">App-Kategorien</string>
+    <string name="category_new_label">Neue Kategorie</string>
+    <string name="category_edit_apps">Apps bearbeiten</string>
+    <plurals name="category_app_count">
+        <item quantity="one">%d App</item>
+        <item quantity="other">%d Apps</item>
+    </plurals>
+    <!-- Inferred app categories (system metadata) -->
+    <string name="inferred_category_utilities">Dienstprogramme</string>
+    <string name="inferred_category_games">Spiele</string>
+    <string name="inferred_category_productivity">Produktivität</string>
+    <string name="inferred_category_social">Soziales</string>
+    <string name="inferred_category_media">Medien</string>
+    <!-- Home screen -->
+    <string name="home_set_default_launcher">Als Standard-Launcher festlegen</string>
+    <string name="home_weather_app_picker_title">Wetter-App auswählen</string>
+    <!-- Home alignment -->
+    <string name="home_alignment_title">Ausrichtung des Startbildschirms</string>
+    <string name="home_alignment_subtitle">Position von App-Namen und Schnellzugriffssymbolen</string>
+    <string name="home_alignment_left">Links</string>
+    <string name="home_alignment_center">Mitte</string>
+    <string name="home_alignment_right">Rechts</string>
+    <!-- Edit home / shortcuts screens -->
+    <string name="edit_home_title">Startbildschirm bearbeiten</string>
+    <string name="edit_shortcuts_title">Schnellzugriffe bearbeiten</string>
+    <string name="edit_shortcuts_section_selected">Ausgewählte Schnellzugriffe</string>
+    <string name="edit_shortcuts_section_all_actions">Alle App-Aktionen</string>
+    <string name="edit_home_section_on_home">Apps auf dem Startbildschirm</string>
+    <string name="edit_shortcuts_choose_icon">Symbol auswählen</string>
+    <string name="search_icons">Symbole suchen</string>
+    <string name="icon_picker_current_icon">Aktuelles Symbol</string>
+    <string name="icon_cat_home">Zuhause</string>
+    <string name="icon_cat_communicate">Kommunikation</string>
+    <string name="icon_cat_social">Soziales</string>
+    <string name="icon_cat_images">Bilder</string>
+    <string name="icon_cat_audio_video">Audio &amp; Video</string>
+    <string name="icon_cat_text">Text</string>
+    <string name="icon_cat_maps">Karten</string>
+    <string name="icon_cat_travel">Reisen</string>
+    <string name="icon_cat_transit">Verkehr</string>
+    <string name="icon_cat_activities">Aktivitäten</string>
+    <string name="icon_cat_business">Business</string>
+    <string name="icon_cat_hardware">Hardware</string>
+    <string name="icon_cat_android">Android</string>
+    <string name="icon_cat_ui_actions">UI-Aktionen</string>
+    <string name="icon_cat_actions">Aktionen</string>
+    <string name="icon_cat_household">Haushalt</string>
+    <string name="icon_cat_privacy">Datenschutz</string>
+    <string name="icon_cat_other">Sonstige</string>
+    <string name="icon_cat_search_results">Treffer</string>
+    <!-- Settings -->
+    <string name="settings_title">Einstellungen</string>
+    <string name="settings_section_appearance">Darstellung</string>
+    <string name="settings_show_status_bar">Statusleiste anzeigen</string>
+    <string name="settings_allow_landscape_rotation">Querformat erlauben</string>
+    <string name="settings_language_label">Sprache</string>
+    <string name="settings_language_system_default">Systemstandard</string>
+    <string name="settings_set_background_image">Hintergrundbild festlegen</string>
+    <string name="settings_set_black_wallpaper">Schwarzes Hintergrundbild festlegen</string>
+    <string name="settings_section_home_screen">Startbildschirm</string>
+    <string name="settings_accessibility">Gerätesteuerung</string>
+    <string name="settings_accessibility_subtitle">Funktionen verwalten, die Zugriff auf Bedienungshilfen benötigen</string>
+    <string name="settings_accessibility_page_title">Gerätesteuerung</string>
+    <string name="settings_accessibility_permission">Bedienungshilfen-Berechtigung</string>
+    <string name="settings_accessibility_permission_enabled">Für Fokus Launcher gewährt</string>
+    <string name="settings_accessibility_permission_disabled">Erforderlich für Doppeltipp zum Sperren und Rückkehr nach langer Sperre</string>
+    <string name="settings_home_widgets">Widgets konfigurieren</string>
+    <string name="settings_home_widgets_subtitle">Wähle, welche Widgets angezeigt werden und welche Apps sich beim Antippen öffnen</string>
+    <string name="settings_show_home_clock">Uhr anzeigen</string>
+    <string name="settings_show_home_date">Datum anzeigen</string>
+    <string name="settings_show_home_weather">Wetter anzeigen</string>
+    <string name="settings_show_home_battery">Akkustand anzeigen</string>
+    <string name="settings_widget_clock_app">Uhr-App</string>
+    <string name="settings_widget_calendar_app">Kalender-App</string>
+    <string name="settings_double_tap_to_lock">Doppeltipp zum Sperren</string>
+    <string name="settings_double_tap_to_lock_subtitle">Sperrt das Gerät durch doppeltes Tippen auf eine leere Stelle des Startbildschirms</string>
+    <string name="settings_return_home_after_long_lock">Nach langer Sperre zum Startbildschirm zurückkehren</string>
+    <string name="settings_return_home_after_long_lock_subtitle">Zeigt nach dem Entsperren den Launcher an, wenn das Gerät lange genug gesperrt war</string>
+    <string name="settings_long_lock_duration">Dauer der langen Sperre</string>
+    <string name="settings_long_lock_duration_subtitle">Wie lange das Gerät gesperrt sein muss, bevor Fokus nach dem Entsperren zum Startbildschirm zurückkehrt.</string>
+    <string name="accessibility_lock_service_description">Erlaubt Fokus Launcher, den Bildschirm zu sperren und nach langen Sperren zum Launcher zurückzukehren.</string>
+    <string name="double_tap_lock_failed">Gerät konnte nicht gesperrt werden</string>
+    <string name="settings_edit_home_screen">Startbildschirm bearbeiten</string>
+    <string name="settings_edit_shortcuts">Schnellzugriffe bearbeiten</string>
+    <string name="settings_weather_app">Wetter-App</string>
+    <string name="settings_swipe_left">Nach links wischen</string>
+    <string name="settings_swipe_right">Nach rechts wischen</string>
+    <string name="settings_edit_app_categories">App-Kategorien bearbeiten</string>
+    <string name="settings_section_app_drawer">App-Drawer</string>
+    <string name="settings_drawer_sidebar_categories">Kategorien-Seitenleiste verwenden</string>
+    <string name="settings_drawer_sidebar_categories_subtitle">Ersetzt die Suchleiste durch eine vertikale Kategorien-Seitenleiste.</string>
+    <string name="settings_drawer_category_rail_side">Position der Kategorien-Seitenleiste</string>
+    <string name="settings_drawer_category_rail_side_subtitle">Standardmäßig ist die Seitenleiste rechts. Eine Kategorie in der Schublade lange drücken, um ihr Symbol zu ändern.</string>
+    <string name="settings_drawer_rail_position_left">Links</string>
+    <string name="settings_drawer_rail_position_right">Rechts</string>
+    <string name="settings_drawer_app_sort">App-Sortierung</string>
+    <string name="settings_drawer_app_sort_subtitle">„Meist geöffnet“ zählt Starts aus dem App-Drawer dieses Launchers. Ohne erfasste Öffnungen bleibt die Liste alphabetisch.</string>
+    <string name="settings_drawer_app_sort_alphabetical">A–Z</string>
+    <string name="settings_drawer_app_sort_most_opened">Meist geöffnet</string>
+    <string name="settings_section_hidden_apps">Ausgeblendete Apps</string>
+    <string name="settings_no_hidden_apps">Keine ausgeblendeten Apps</string>
+    <string name="settings_section_renamed_apps">Umbenannte Apps</string>
+    <string name="settings_no_renamed_apps">Keine umbenannten Apps</string>
+    <string name="settings_section_data">Daten</string>
+    <string name="settings_export_logs_title">App-Logs exportieren</string>
+    <string name="settings_export_logs_subtitle">Diagnosedatei für Fehlerberichte teilen</string>
+    <string name="settings_export_logs_share_chooser">Diagnoseprotokoll teilen</string>
+    <string name="settings_export_logs_share_subject">Fokus Launcher Diagnoseprotokoll</string>
+    <string name="toast_export_logs_failed">Logexport konnte nicht vorbereitet werden</string>
+    <string name="settings_reset_all_data">Alle Daten zurücksetzen</string>
+    <string name="settings_reset_confirm_title">Alle Daten zurücksetzen?</string>
+    <string name="settings_reset_confirm_message">Dadurch werden Favoriten, Schnellzugriffe, ausgeblendete Apps, umbenannte Apps und alle anderen Einstellungen gelöscht. Die App wird in ihren Anfangszustand zurückgesetzt.</string>
+    <string name="settings_app_picker_title">App auswählen</string>
+    <string name="settings_font_label">Schriftart</string>
+    <plurals name="settings_shortcuts_configured">
+        <item quantity="one">%d Schnellzugriff konfiguriert</item>
+        <item quantity="other">%d Schnellzugriffe konfiguriert</item>
+    </plurals>
+    <plurals name="settings_long_lock_duration_minutes">
+        <item quantity="one">%d Minute</item>
+        <item quantity="other">%d Minuten</item>
+    </plurals>
+    <plurals name="settings_categories_count">
+        <item quantity="one">%d Kategorie</item>
+        <item quantity="other">%d Kategorien</item>
+    </plurals>
+    <!-- Onboarding -->
+    <string name="onboarding_welcome_title">Fokus Launcher</string>
+    <string name="onboarding_welcome_subtitle">Ein minimalistischer Startbildschirm</string>
+    <string name="onboarding_get_started">Loslegen</string>
+    <string name="onboarding_background_title">Wähle deinen Hintergrund</string>
+    <string name="onboarding_background_subtitle">Ein schwarzer Hintergrund hilft dir, dich zu konzentrieren, und spart Akku auf OLED-Bildschirmen</string>
+    <string name="onboarding_background_black">Ich mag Schwarz</string>
+    <string name="onboarding_background_wallpaper">Aktuelles Hintergrundbild behalten</string>
+    <string name="onboarding_location_title">Standort für das Wetter</string>
+    <string name="onboarding_location_subtitle">Wir verwenden deinen Standort, um das aktuelle Wetter auf deinem Startbildschirm anzuzeigen. Wenn du diesen Schritt überspringst, wird das Wetter-Widget ausgeblendet.</string>
+    <string name="onboarding_location_allow">Erlauben</string>
+    <string name="onboarding_location_skip">Überspringen</string>
+    <string name="onboarding_set_default_title">Als Standard festlegen</string>
+    <string name="onboarding_set_default_subtitle">Lege Fokus als Standard fest, damit es jedes Mal verwendet wird, wenn du zum Startbildschirm gehst</string>
+    <string name="onboarding_set_default_button">Als Standard festlegen</string>
+    <string name="onboarding_customize_title">Startbildschirm anpassen</string>
+    <string name="onboarding_customize_subtitle">Wähle die Apps aus, die auf deinem Startbildschirm erscheinen sollen</string>
+    <string name="onboarding_choose_apps">Apps auswählen</string>
+    <string name="onboarding_swipe_title">Wisch-Schnellzugriffe</string>
+    <string name="onboarding_swipe_subtitle">Wische auf dem Startbildschirm nach links oder rechts, um deine Lieblings-Apps zu starten</string>
+    <string name="onboarding_swipe_left">Nach links wischen</string>
+    <string name="onboarding_swipe_right">Nach rechts wischen</string>
+    <string name="onboarding_swipe_change">Ändern</string>
+    <string name="onboarding_swipe_not_set">Nicht festgelegt</string>
+    <string name="onboarding_tips_title">Kurze Tipps</string>
+    <string name="onboarding_tip_swipe">Wische nach oben, um den App-Drawer zu öffnen</string>
+    <string name="onboarding_tip_longpress">Halte den Startbildschirm gedrückt, um ihn zu bearbeiten oder die Einstellungen zu öffnen</string>
+    <string name="onboarding_done">Fertig</string>
+    <string name="onboarding_skip">Überspringen</string>
+    <string name="onboarding_next">Weiter</string>
+    <!-- Settings - Weather location (shown only when disabled) -->
+    <string name="settings_weather_location_disabled">Standort für Wetter aktivieren</string>
+    <string name="settings_weather_location_disabled_subtitle">Tippe hier, um den Standortzugriff zu erlauben</string>
+    <string name="settings_weather_location_enable_button">Aktivieren</string>
+    <!-- Settings - Weather app -->
+    <string name="settings_weather_app_system_default">Systemstandard</string>
+    <string name="settings_weather_app_not_configured">Nicht konfiguriert</string>
+    <!-- Settings - Connect section -->
+    <string name="settings_connect_section">Verbinden</string>
+    <string name="settings_github_title">Stern auf GitHub geben</string>
+    <string name="settings_github_subtitle">Quellcode ansehen und mitmachen</string>
+    <string name="settings_weblate_title">Beim Übersetzen helfen</string>
+    <string name="settings_weblate_subtitle">Übersetzungen auf Weblate beitragen</string>
+    <string name="settings_matrix_title">Am Chat teilnehmen</string>
+    <string name="settings_matrix_subtitle">Hilfe erhalten und Feedback geben</string>
+    <string name="edit_home_section_all_apps" translatable="false">\@string/drawer_filter_all_apps</string>
+    <string name="app_name" translatable="false">Fokus Launcher</string>
+</resources>

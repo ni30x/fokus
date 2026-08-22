@@ -1,0 +1,6 @@
+New: dot shortcuts, assign apps to letters and open them immediately with ".a".
+Tune wallpaper readability with new photo wallpaper controls.
+
+Prevent Private Space apps from disappearing in rare cases.
+Name your profiles in the app categories editor.
+New Italian translation; updates to Basque, Indonesian, Polish, Romanian, Russian, and Spanish. Thanks to everyone who contributed.

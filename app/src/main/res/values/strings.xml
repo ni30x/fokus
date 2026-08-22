@@ -1,0 +1,459 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">Fokus</string>
+
+    <!-- Special drawer categories: English keys live in ReservedCategoryNames.kt; translate these for UI. -->
+    <string name="drawer_filter_all_apps">All apps</string>
+    <string name="drawer_filter_private">Private</string>
+    <string name="drawer_filter_work">Work</string>
+    <string name="drawer_filter_uncategorized">Uncategorized</string>
+    <string name="drawer_menu_launcher_settings">Launcher settings</string>
+    <string name="drawer_reorder">Reorder</string>
+    <string name="drawer_reorder_done">Done</string>
+    <string name="drawer_private_space_lock">Lock Private Space</string>
+    <string name="drawer_private_space_unlock">Unlock Private Space</string>
+
+    <!-- App drawer: one section per Android user profile -->
+    <string name="drawer_section_personal">Personal</string>
+    <string name="drawer_section_work_profile">Work profile</string>
+    <string name="drawer_section_profile_numbered">Profile %1$d</string>
+    <string name="drawer_section_other_profile">Other profile</string>
+    <string name="drawer_section_clone_profile">Parallel apps</string>
+    <string name="drawer_section_private_space">Private Space</string>
+
+    <!-- Search -->
+    <string name="search">Search</string>
+    <string name="search_apps">Search apps</string>
+    <string name="search_apps_and_actions">Search apps and actions</string>
+
+    <!-- Common actions -->
+    <string name="action_back">Back</string>
+    <string name="action_done">Done</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_save">Save</string>
+    <string name="action_add">Add</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_change">Change</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_reset">Reset</string>
+    <string name="cd_drag_to_reorder">Drag to reorder</string>
+    <string name="cd_change_icon">Change icon</string>
+    <string name="cd_shortcut_icon">Shortcut icon</string>
+    <string name="cd_edit_home_screen">Edit home screen</string>
+    <string name="cd_settings">Settings</string>
+    <string name="cd_menu">Menu</string>
+    <string name="cd_open_link">Open link</string>
+    <string name="cd_open_subpage">Opens another screen</string>
+    <string name="cd_unhide_app">Unhide app</string>
+    <string name="cd_remove_rename">Remove rename</string>
+    <string name="cd_restore_archived_app">Restore archived app</string>
+    <string name="cd_delete_category">Delete category</string>
+
+    <!-- Shortcut / target labels -->
+    <string name="shortcut_target_not_set">Not set</string>
+    <string name="shortcut_target_deep_link">Deep link</string>
+    <string name="shortcut_target_app_with_label">%1$s - %2$s</string>
+    <string name="shortcut_open_app">Open app</string>
+    <string name="shortcut_open_dialer">Open dialer</string>
+    <string name="shortcut_generic_label">Shortcut</string>
+    <!-- Right-shortcut target: ACTION_DIAL / system default, not a specific installed "Phone" app -->
+    <string name="shortcut_target_phone">Phone (default dialer)</string>
+    <string name="widget_page_shortcut_label">Widget page</string>
+    <string name="toast_weather_app_launch_failed">Selected weather app could not be launched</string>
+    <string name="toast_digital_wellbeing_launch_failed">Digital Wellbeing could not be opened</string>
+
+    <!-- App & category sheets -->
+    <string name="app_name_placeholder">App name</string>
+    <string name="action_add_to_home">Add to home screen</string>
+    <string name="action_remove_from_home">Remove from home screen</string>
+    <string name="action_set_category">Set category</string>
+    <string name="action_app_info">App info</string>
+    <string name="action_hide">Hide</string>
+    <string name="action_remove_shortcut">Remove shortcut</string>
+    <string name="action_uninstall">Uninstall</string>
+    <string name="category_name_label">Category name</string>
+    <string name="category_action_rename">Rename</string>
+    <string name="category_action_edit_apps">Edit apps in category</string>
+    <string name="category_action_remove">Remove category</string>
+    <string name="category_icon_picker_title">Category icon</string>
+    <string name="category_action_reset_icon">Reset to default icon</string>
+    <string name="category_apps_screen_section_in_category">Apps in category</string>
+    <string name="category_no_category">No category</string>
+    <string name="category_settings_title">App categories</string>
+    <string name="category_new_label">New category</string>
+    <string name="category_add_error_blank">Enter a category name. Empty names are not saved.</string>
+    <string name="category_add_error_reserved_all_apps">\"All apps\" is a built-in drawer filter, not a custom category. Choose a different name.</string>
+    <string name="category_add_error_reserved_uncategorized">\"Uncategorized\" is the built-in list for apps without a category. Choose a different name.</string>
+    <string name="category_add_error_reserved_private">\"Private\" is reserved for Private Space. Choose a different name.</string>
+    <string name="category_add_error_reserved_work">\"Work\" is reserved for work profile apps. Choose a different name.</string>
+    <string name="category_add_error_duplicate">A category named \"%1$s\" already exists. If you typed a translated word, it may match a default type such as Games or Media.</string>
+    <string name="category_edit_apps">Edit apps</string>
+
+    <plurals name="category_app_count">
+        <item quantity="one">%d app</item>
+        <item quantity="other">%d apps</item>
+    </plurals>
+
+    <!-- Inferred app categories (system metadata) -->
+    <string name="inferred_category_utilities">Utilities</string>
+    <string name="inferred_category_games">Games</string>
+    <string name="inferred_category_productivity">Productivity</string>
+    <string name="inferred_category_social">Social</string>
+    <string name="inferred_category_media">Media</string>
+
+    <!-- Home screen -->
+    <string name="home_set_default_launcher">Set as default launcher</string>
+    <string name="home_weather_app_picker_title">Select weather app</string>
+
+    <!-- Android widget page -->
+    <string name="widget_page">Widget page</string>
+    <string name="add_widget">Add widget</string>
+    <string name="manage_widgets">Manage widgets</string>
+    <string name="remove_widget">Remove widget</string>
+    <string name="resize_widget">Resize widget</string>
+    <string name="no_widgets">No widgets</string>
+    <string name="widget_bind_failed">Could not add widget</string>
+    <string name="widget_configure_failed">Widget setup was canceled</string>
+    <string name="widget_picker_title">Add widget</string>
+    <string name="widget_initial_height">%1$ddp</string>
+
+    <!-- Home alignment -->
+    <string name="home_alignment_title">Home screen alignment</string>
+    <string name="home_alignment_subtitle">Position of app labels and shortcut icons</string>
+    <string name="home_alignment_left">Left</string>
+    <string name="home_alignment_center">Center</string>
+    <string name="home_alignment_middle">Middle</string>
+    <string name="home_alignment_right">Right</string>
+
+    <!-- Edit home / shortcuts screens -->
+    <string name="edit_home_title">Edit home screen</string>
+    <string name="edit_shortcuts_title">Edit shortcuts</string>
+    <string name="edit_shortcuts_section_selected">Selected shortcuts</string>
+    <string name="edit_shortcuts_section_all_actions">All app actions</string>
+    <string name="edit_home_section_on_home">Home screen apps</string>
+    <string name="edit_home_section_all_apps" translatable="false">@string/drawer_filter_all_apps</string>
+    <string name="edit_shortcuts_choose_icon">Choose icon</string>
+    <string name="search_icons">Search icons</string>
+    <string name="icon_picker_current_icon">Current icon</string>
+    <!-- Google Material Symbols metadata categories (fonts.google.com); see MaterialOutlinedIconCategories. -->
+    <string name="icon_cat_home">Home</string>
+    <string name="icon_cat_communicate">Communicate</string>
+    <string name="icon_cat_social">Social</string>
+    <string name="icon_cat_images">Images</string>
+    <string name="icon_cat_audio_video">Audio &amp; video</string>
+    <string name="icon_cat_text">Text</string>
+    <string name="icon_cat_maps">Maps</string>
+    <string name="icon_cat_travel">Travel</string>
+    <string name="icon_cat_transit">Transit</string>
+    <string name="icon_cat_activities">Activities</string>
+    <string name="icon_cat_business">Business</string>
+    <string name="icon_cat_hardware">Hardware</string>
+    <string name="icon_cat_android">Android</string>
+    <string name="icon_cat_ui_actions">UI actions</string>
+    <string name="icon_cat_actions">Actions</string>
+    <string name="icon_cat_household">Household</string>
+    <string name="icon_cat_privacy">Privacy</string>
+    <string name="icon_cat_other">Other</string>
+    <string name="icon_cat_search_results">Matching icons</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_show_status_bar">Show status bar</string>
+    <string name="settings_allow_landscape_rotation">Allow landscape</string>
+    <string name="settings_language_label">Language</string>
+    <string name="settings_language_system_default">System default</string>
+    <string name="settings_set_background_image">Set background image</string>
+    <string name="settings_set_black_wallpaper">Set black wallpaper</string>
+    <string name="settings_section_image_wallpaper_accessibility">Image wallpaper — readability</string>
+    <string name="settings_photo_outline_strength_label">Text and icon backdrop</string>
+    <string name="settings_photo_outline_strength_subtitle">Semi-transparent black pills behind the clock, favorites, home widgets, and shortcut icons on a background image.</string>
+    <string name="settings_photo_outline_width_dp_default">Default</string>
+    <string name="settings_photo_outline_width_dp_value">Level %1$d</string>
+    <string name="settings_photo_drawer_overlay_label">App drawer dim strength</string>
+    <string name="settings_photo_drawer_overlay_subtitle">Increases how dark the full-screen dim is behind the app drawer.</string>
+    <string name="settings_section_home_screen">Home screen</string>
+    <string name="settings_accessibility">Device Control</string>
+    <string name="settings_accessibility_subtitle">Manage features that need accessibility access</string>
+    <string name="settings_accessibility_page_title">Device Control</string>
+    <string name="settings_accessibility_permission">Accessibility permission</string>
+    <string name="settings_accessibility_permission_enabled">Granted for Fokus Launcher</string>
+    <string name="settings_accessibility_permission_disabled">Required for double tap to lock and return home after long lock</string>
+    <string name="settings_home_widgets">Configure widgets</string>
+    <string name="settings_home_widgets_subtitle">Choose which widgets to show and which apps to open when you tap them</string>
+    <string name="settings_show_home_clock">Show clock</string>
+    <string name="settings_show_home_date">Show date</string>
+    <string name="settings_home_date_format">Date format</string>
+    <string name="settings_home_date_format_system">Automatic (locale)</string>
+    <string name="settings_home_date_format_us_slashes">MM/DD/YYYY</string>
+    <string name="settings_home_date_format_eu_slashes">DD/MM/YYYY</string>
+    <string name="settings_home_date_format_eu_dots">DD.MM.YYYY</string>
+    <string name="settings_home_date_format_weekday_month">Mon DD, YYYY</string>
+    <string name="settings_home_date_format_month_long">Month DD, YYYY</string>
+    <string name="settings_temperature_unit">Temperature unit</string>
+    <string name="settings_temperature_unit_system">Automatic (locale)</string>
+    <string name="settings_temperature_unit_celsius">Celsius (°C)</string>
+    <string name="settings_temperature_unit_fahrenheit">Fahrenheit (°F)</string>
+    <string name="settings_show_home_weather">Show weather</string>
+    <string name="settings_show_world_clock_weather">Show weather on world clocks</string>
+    <string name="settings_show_world_clock_weather_subtitle">Looks up conditions from each city label</string>
+    <string name="settings_show_home_battery">Show battery level</string>
+    <string name="settings_show_home_media">Show media controls</string>
+    <string name="settings_show_home_media_subtitle">Now playing with transport controls when audio is active</string>
+    <string name="settings_show_home_media_subtitle_grant_access">Requires notification access — turn on to grant in system settings</string>
+    <string name="settings_notification_indicators">Show notification indicators</string>
+    <string name="settings_notification_indicators_subtitle">Highlight apps with active notifications on home and in the drawer</string>
+    <string name="settings_notification_indicators_subtitle_grant_access">Requires notification access — turn on to grant in system settings</string>
+    <string name="settings_notification_indicator_style">Indicator style</string>
+    <string name="settings_notification_indicator_style_dot">Dot beside label</string>
+    <string name="settings_notification_indicator_style_colored_label">Colored label</string>
+    <string name="settings_notification_indicator_color">Indicator color</string>
+    <string name="settings_notification_indicator_color_red">Red</string>
+    <string name="settings_notification_indicator_color_orange">Orange</string>
+    <string name="settings_notification_indicator_color_yellow">Yellow</string>
+    <string name="settings_notification_indicator_color_green">Green</string>
+    <string name="settings_notification_indicator_color_cyan">Cyan</string>
+    <string name="settings_notification_indicator_color_blue">Blue</string>
+    <string name="settings_notification_indicator_color_purple">Purple</string>
+    <string name="settings_notification_indicator_color_pink">Pink</string>
+    <string name="settings_notification_indicator_color_white">White</string>
+    <string name="settings_notification_indicator_color_gray">Gray</string>
+    <string name="settings_show_home_screen_time">Show screen time</string>
+    <string name="settings_show_home_screen_time_subtitle">Screen-on time in the past 24 hours</string>
+    <string name="settings_show_home_screen_time_subtitle_grant_access">Requires usage access — turn on to grant in system settings</string>
+    <string name="settings_show_home_world_clock_subtitle">Cities under the date</string>
+    <string name="settings_world_clock_cities">World clocks</string>
+    <string name="settings_world_clock_cities_subtitle">Add cities to show on home</string>
+    <string name="settings_world_clock_cities_empty">No cities yet</string>
+    <string name="settings_world_clock_add_city">Add city</string>
+    <string name="settings_world_clock_edit_city">Edit city</string>
+    <string name="settings_world_clock_city_label">Label</string>
+    <string name="settings_world_clock_city_zone">Time zone</string>
+    <string name="settings_world_clock_search_zones">Search time zones</string>
+    <string name="settings_world_clock_no_zones">No matching time zones</string>
+    <string name="settings_world_clock_remove_city">Remove city</string>
+    <string name="settings_show_home_countdown_subtitle">Event countdown under the date</string>
+    <string name="settings_countdown_event">Countdown</string>
+    <string name="settings_countdown_event_empty">No event set</string>
+    <string name="settings_countdown_edit">Edit countdown</string>
+    <string name="settings_countdown_title">Title</string>
+    <string name="settings_countdown_date">Date</string>
+    <string name="settings_countdown_time">Time</string>
+    <string name="settings_countdown_clear">Clear countdown</string>
+    <string name="settings_home_extra_widgets">Other widgets</string>
+    <string name="settings_home_extra_widgets_empty">No other widgets yet</string>
+    <string name="settings_add_other_widget">Add other widget</string>
+    <string name="settings_add_other_widget_title">Choose widget type</string>
+    <string name="settings_remove_other_widget">Remove</string>
+    <string name="settings_other_widget_already_added">Already added</string>
+    <string name="home_countdown_now">Now</string>
+    <string name="home_countdown_past">Passed</string>
+    <string name="media_notification_listener_label">Fokus now playing</string>
+    <!-- Media widget content descriptions -->
+    <string name="media_previous_track">Previous track</string>
+    <string name="media_play">Play</string>
+    <string name="media_pause">Pause</string>
+    <string name="media_buffering">Buffering</string>
+    <string name="media_next_track">Next track</string>
+    <string name="media_like">Like</string>
+    <string name="media_unlike">Unlike</string>
+    <string name="media_save">Save to library</string>
+    <string name="media_unsave">Remove from library</string>
+    <string name="settings_widget_clock_app">Clock app</string>
+    <string name="settings_widget_calendar_app">Calendar app</string>
+    <string name="settings_double_tap_to_lock">Double tap to lock</string>
+    <string name="settings_double_tap_to_lock_subtitle">Lock the device by double tapping empty space on the home screen</string>
+    <string name="settings_return_home_after_long_lock">Return home after long lock</string>
+    <string name="settings_return_home_after_long_lock_subtitle">After unlock, show the launcher if the device stayed locked long enough</string>
+    <string name="settings_long_lock_duration">Long lock duration</string>
+    <string name="settings_long_lock_duration_subtitle">How long the device must stay locked before Fokus returns to your home screen on unlock.</string>
+    <string name="accessibility_lock_service_label">Fokus device control</string>
+    <string name="accessibility_lock_service_description">Supports optional double-tap lock on the Fokus home screen and returning to this launcher after a long lock when you enable that in the app. Does not read screen content from other apps or collect their data.</string>
+    <!-- Stand-alone AccessibilityService prominent disclosure (Play User Data policy); do not merge with other privacy copy -->
+    <string name="accessibility_prominent_disclosure_title">Accessibility service</string>
+    <string name="accessibility_prominent_disclosure_body">Fokus uses AccessibilityService only for optional double-tap lock and return home after a long lock (if you turn that on). It does not read other apps’ screens. Processing stays on your device; we do not sell it, upload it, or use it for ads or analytics. You enable or disable the service in Android settings.</string>
+    <string name="accessibility_prominent_disclosure_checkbox">I have read the above and agree.</string>
+    <string name="accessibility_prominent_disclosure_continue">Continue</string>
+    <string name="accessibility_prominent_disclosure_not_now">Not now</string>
+    <string name="double_tap_lock_failed">Could not lock the device</string>
+    <string name="settings_edit_home_screen">Edit home screen</string>
+    <!-- Short labels beside edit icon (sheets); chevron subpages use settings_edit_* titles -->
+    <string name="settings_nav_home_screen">Home screen</string>
+    <string name="settings_nav_shortcuts">Shortcuts</string>
+    <string name="settings_edit_shortcuts">Edit shortcuts</string>
+    <string name="settings_weather_app">Weather app</string>
+    <string name="settings_swipe_left">Swipe left</string>
+    <string name="settings_swipe_right">Swipe right</string>
+    <string name="settings_edit_app_categories">Edit app categories</string>
+    <string name="settings_section_app_drawer">App drawer</string>
+    <string name="settings_drawer_show_scrollbar">Show scrollbar</string>
+    <string name="settings_drawer_show_scrollbar_subtitle">Display an A-Z alphabetical scrollbar in the app drawer.</string>
+    <string name="settings_drawer_sidebar_categories">Use category sidebar</string>
+    <string name="settings_drawer_sidebar_categories_subtitle">Replaces the search bar with a vertical category sidebar.</string>
+    <string name="settings_drawer_search_auto_launch">Auto launch apps</string>
+    <string name="settings_drawer_search_auto_launch_subtitle">When only one app matches your search, open it automatically.</string>
+    <string name="settings_drawer_category_rail_side">Category sidebar position</string>
+    <string name="settings_drawer_category_rail_side_subtitle">By default, the sidebar is on the right. Long-press a category in the drawer to change its icon.</string>
+    <string name="settings_drawer_rail_position_left">Left</string>
+    <string name="settings_drawer_rail_position_right">Right</string>
+    <string name="settings_drawer_app_sort">App order</string>
+    <string name="settings_drawer_app_sort_subtitle">Most opened counts launches from this launcher\'s app drawer. With no opens recorded, the list stays alphabetical.</string>
+    <string name="settings_drawer_app_sort_alphabetical">A–Z</string>
+    <string name="settings_drawer_app_sort_most_opened">Most opened</string>
+    <string name="settings_drawer_app_sort_custom">Custom</string>
+    <string name="settings_dot_search_title">Dot search &amp; shortcuts</string>
+    <string name="settings_dot_search_subtitle">Type `. query` for search, `.x query` for a search target, or `.x` for an immediate shortcut</string>
+    <string name="settings_profile_names_title">Profile names</string>
+    <string name="settings_profile_names_subtitle">Rename personal, work, and other profile sections in the drawer and on the home screen</string>
+    <string name="settings_profile_names_help">Leave the field blank and tap Save to restore the default name. Names apply to drawer headers, grouped pickers, and profile badges next to favorites.</string>
+    <string name="settings_profile_names_default_label">Default: %1$s</string>
+    <string name="settings_profile_names_field_label">Display name</string>
+    <string name="settings_profile_names_save">Save</string>
+    <string name="settings_profile_names_reset">Reset</string>
+    <string name="settings_dot_search_screen_title">Dot search &amp; shortcuts</string>
+    <string name="settings_dot_search_explanation">Use dot search for queries and dot shortcuts for immediate actions. Type `. query` for the default search target. Add a Search target or URL template for `.x query`, or add an Open shortcut target for `.x`. URL templates use %1$s where the query belongs (for example https://example.com/search?q=%1$s).</string>
+    <string name="settings_dot_search_default_label">Default search app</string>
+    <string name="settings_dot_search_url_template">URL template</string>
+    <string name="settings_dot_search_url_template_dialog_title">Search URL template</string>
+    <string name="settings_dot_search_url_template_help">You can use an HTTPS search link or an app deep link (for example intent://). Put %1$s where the query should go—the launcher replaces it with what you type after `. query` or `.x query`. Example: https://example.com/search?q=%1$s</string>
+    <string name="settings_dot_search_url_template_error">Include %1$s where the query goes (example: https://example.com/search?q=%1$s).</string>
+    <string name="settings_dot_search_add_shortcut_title">Add shortcut</string>
+    <string name="settings_dot_search_add_shortcut_app">Open shortcut target</string>
+    <string name="settings_dot_search_add_shortcut_help">Type `.x` to open an app, phone action, or launcher shortcut immediately.</string>
+    <string name="settings_dot_search_add_search_target_app">Search target</string>
+    <string name="settings_dot_search_add_search_target_help">Type `.x query` to send a query to an app that exposes search.</string>
+    <string name="settings_dot_search_add_shortcut_url">URL template</string>
+    <string name="settings_dot_search_add_url_template_help">Type `.x query` to open a URL or deep link with the query inserted.</string>
+    <string name="settings_dot_search_url_template_for_alias">URL for .%1$s …</string>
+    <string name="settings_dot_search_no_web_search_apps">No installed apps expose web or in-app search intents for their package.</string>
+    <string name="settings_dot_search_default_system">System default (browser)</string>
+    <string name="settings_dot_search_aliases_section">Letter shortcuts</string>
+    <string name="settings_dot_search_add_alias">Add shortcut</string>
+    <string name="settings_dot_search_alias_dialog_title">Shortcut letter</string>
+    <string name="settings_dot_search_invalid_alias">Enter one lowercase letter (a–z).</string>
+    <string name="settings_dot_search_alias_taken">That character is already used.</string>
+    <string name="settings_dot_search_pick_default_app">Choose app for `. query`</string>
+    <string name="settings_dot_search_pick_alias_app">Choose app for this shortcut</string>
+    <string name="settings_dot_search_pick_alias_search_app">Choose search app for this shortcut</string>
+    <string name="settings_dot_search_shortcut_mode_label">Opens immediately</string>
+    <string name="settings_dot_search_search_mode_label">Search target</string>
+    <string name="cd_remove_alias">Remove shortcut</string>
+    <string name="settings_section_hidden_apps">Hidden apps</string>
+    <string name="settings_no_hidden_apps">No hidden apps</string>
+    <string name="settings_section_archived_apps">Archived apps</string>
+    <string name="settings_no_archived_apps">No archived apps</string>
+    <string name="settings_section_renamed_apps">Renamed apps</string>
+    <string name="settings_no_renamed_apps">No renamed apps</string>
+    <string name="settings_section_data">Data</string>
+    <string name="settings_export_logs_title">Export app logs</string>
+    <string name="settings_export_logs_subtitle">Share a diagnostic file for bug reports</string>
+    <string name="settings_export_logs_share_chooser">Share diagnostic log</string>
+    <string name="settings_export_logs_share_subject">Fokus Launcher diagnostic log</string>
+    <string name="toast_export_logs_failed">Could not prepare log export</string>
+    <string name="settings_reset_all_data">Reset all data</string>
+    <string name="settings_reset_confirm_title">Reset all data?</string>
+    <string name="settings_reset_confirm_message">This will clear favorites, shortcuts, hidden apps, renamed apps, and all other settings. The app will return to its initial state.</string>
+    <string name="settings_app_picker_title">Select app</string>
+    <string name="settings_font_label">Font</string>
+    <string name="settings_font_import_ttf">Import font (.ttf)</string>
+    <string name="settings_font_import_ttf_subtitle">Use a TrueType font file from your device</string>
+    <string name="settings_font_clear_custom">Remove imported font</string>
+    <string name="settings_font_custom_imported">Imported font</string>
+    <string name="settings_font_import_failed_unreadable">Could not read that file</string>
+    <string name="settings_font_import_failed_extension">Only .ttf files are supported</string>
+    <string name="settings_font_import_failed_invalid">That file is not a valid TrueType font</string>
+    <string name="settings_font_import_failed_io">Could not save the font file</string>
+    <string name="settings_font_size_label">Font size</string>
+    <string name="settings_font_size_subtitle">Stacks with your device font size</string>
+    <string name="settings_visual_style_label">Color style</string>
+    <string name="settings_visual_style_subtitle">Neon or classic text and icon colors</string>
+    <string name="settings_look_locked_image_wallpaper">Not available with an image wallpaper. Set a black background below to use colors and glow.</string>
+    <string name="settings_glow_label">Glow</string>
+    <string name="settings_glow_subtitle">Soft halo on text and icons</string>
+    <string name="visual_style_classic">Classic</string>
+    <string name="visual_style_neon_magenta">Cosmic Violet</string>
+    <string name="visual_style_neon_lime">Terminal Green</string>
+    <string name="visual_style_gold">Gold</string>
+    <string name="visual_style_neon_amber">Coral</string>
+    <string name="visual_style_neon_pink">Hot Pink</string>
+    <string name="visual_style_lavender">Lavender</string>
+    <string name="visual_style_sky">Sky</string>
+    <string name="visual_style_sage">Sage</string>
+    <string name="visual_style_rose">Rose</string>
+    <string name="visual_style_emerald">Emerald</string>
+
+    <plurals name="settings_shortcuts_configured">
+        <item quantity="one">%d shortcut configured</item>
+        <item quantity="other">%d shortcuts configured</item>
+    </plurals>
+
+    <plurals name="settings_home_screen_apps_count">
+        <item quantity="one">%d app on home screen</item>
+        <item quantity="other">%d apps on home screen</item>
+    </plurals>
+
+    <plurals name="settings_long_lock_duration_minutes">
+        <item quantity="one">%d minute</item>
+        <item quantity="other">%d minutes</item>
+    </plurals>
+
+    <plurals name="settings_categories_count">
+        <item quantity="one">%d category</item>
+        <item quantity="other">%d categories</item>
+    </plurals>
+
+    <!-- Onboarding -->
+    <string name="onboarding_welcome_title">Fokus Launcher</string>
+    <string name="onboarding_welcome_subtitle">A minimal home screen</string>
+    <string name="onboarding_get_started">Get started</string>
+    <string name="onboarding_background_title">Choose your background</string>
+    <string name="onboarding_background_subtitle">A black background helps you focus and saves battery on OLED screens</string>
+    <string name="onboarding_background_black">I like black</string>
+    <string name="onboarding_background_wallpaper">Keep my wallpaper</string>
+    <string name="onboarding_location_title">Location for weather</string>
+    <string name="onboarding_location_subtitle">We use your location to show the current weather on your home screen. If you skip, the weather widget will be hidden.</string>
+    <string name="onboarding_location_allow">Allow</string>
+    <string name="onboarding_location_skip">Skip</string>
+    <string name="onboarding_set_default_title">Set as default</string>
+    <string name="onboarding_set_default_subtitle">Set Fokus as your default to use it every time you go home</string>
+    <string name="onboarding_set_default_button">Set as default</string>
+    <string name="onboarding_customize_title">Customize home screen</string>
+    <string name="onboarding_customize_subtitle">Pick the apps that appear on your home screen</string>
+    <string name="onboarding_choose_apps">Choose apps</string>
+    <string name="onboarding_swipe_title">Swipe shortcuts</string>
+    <string name="onboarding_swipe_subtitle">Swipe left or right on the home screen to launch your favorite apps</string>
+    <string name="onboarding_swipe_left">Swipe left</string>
+    <string name="onboarding_swipe_right">Swipe right</string>
+    <string name="onboarding_swipe_change">Change</string>
+    <string name="onboarding_swipe_not_set">Not set</string>
+    <string name="onboarding_tips_title">Quick tips</string>
+    <string name="onboarding_tip_swipe">Swipe up to open app drawer</string>
+    <string name="onboarding_tip_longpress">Long-press on home to edit or open settings</string>
+    <string name="onboarding_done">Done</string>
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_next">Next</string>
+
+    <!-- Settings - Weather location (shown only when disabled) -->
+    <string name="settings_weather_location_disabled">Enable location for weather</string>
+    <string name="settings_weather_location_disabled_subtitle">Tap to allow location access</string>
+    <string name="settings_weather_location_enable_button">Enable</string>
+
+    <!-- Settings - Weather app -->
+    <string name="settings_weather_app_system_default">System default</string>
+    <string name="settings_weather_app_not_configured">Not configured</string>
+
+    <!-- Settings - Connect section -->
+    <string name="settings_connect_section">Profile</string>
+    <string name="settings_profile_title">GitHub Profile</string>
+    <string name="settings_profile_subtitle">github.com/ni30x</string>
+    <string name="settings_github_title">Star on GitHub</string>
+    <string name="settings_github_subtitle">View source and contribute</string>
+    <string name="settings_weblate_title">Help translate</string>
+    <string name="settings_weblate_subtitle">Contribute translations on Weblate</string>
+    <string name="settings_matrix_title">Join the discussion</string>
+    <string name="settings_matrix_subtitle">Get help and share feedback</string>
+
+    <!-- Settings - App drawer -->
+    <string name="settings_drawer_scroll_to_top_auto_keyboard">Auto open keyboard</string>
+    <string name="settings_drawer_scroll_to_top_auto_keyboard_subtitle">Automatically open the keyboard when swiping up to the app drawer</string>
+</resources>
