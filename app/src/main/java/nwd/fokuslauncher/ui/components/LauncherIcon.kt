@@ -14,7 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -113,6 +115,8 @@ fun LauncherIcon(
                 with(density) { (3f + 10f * photoPillStrength).dp.toPx() }
             }
 
+    val usesBlurEffect = !outlined && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
     Box(
             modifier =
                     modifier.size(scaledSize)
@@ -124,10 +128,24 @@ fun LauncherIcon(
                                             radius = size.minDimension / 2f + photoPillPaddingPx,
                                     )
                                 }
+                                if (!usesBlurEffect && glow.enabled) {
+                                    // Direct canvas draw pass for glow - avoids extra LayoutNodes & graphicsLayers
+                                    val filter = ColorFilter.tint(haloTint)
+                                    scale(scaleX = glow.outerScale, scaleY = glow.outerScale) {
+                                        with(painter) {
+                                            draw(size = size, alpha = glow.outerAlpha, colorFilter = filter)
+                                        }
+                                    }
+                                    scale(scaleX = glow.midScale, scaleY = glow.midScale) {
+                                        with(painter) {
+                                            draw(size = size, alpha = glow.midAlpha, colorFilter = filter)
+                                        }
+                                    }
+                                }
                             },
             contentAlignment = Alignment.Center
     ) {
-        if (!outlined && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (usesBlurEffect) {
             Icon(
                     painter = painter,
                     contentDescription = null,
@@ -168,35 +186,6 @@ fun LauncherIcon(
                                     .clearAndSetSemantics {},
                     tint = haloTint,
             )
-        } else {
-            Icon(
-                    painter = painter,
-                    contentDescription = null,
-                    modifier =
-                            Modifier.fillMaxSize()
-                                    .graphicsLayer {
-                                        clip = false
-                                        scaleX = glow.outerScale
-                                        scaleY = glow.outerScale
-                                        alpha = glow.outerAlpha
-                                    }
-                                    .clearAndSetSemantics {},
-                    tint = haloTint,
-            )
-            Icon(
-                    painter = painter,
-                    contentDescription = null,
-                    modifier =
-                            Modifier.fillMaxSize()
-                                    .graphicsLayer {
-                                        clip = false
-                                        scaleX = glow.midScale
-                                        scaleY = glow.midScale
-                                        alpha = glow.midAlpha
-                                    }
-                                    .clearAndSetSemantics {},
-                    tint = haloTint,
-            )
         }
         Icon(
                 painter = painter,
@@ -213,3 +202,4 @@ fun LauncherIcon(
         )
     }
 }
+

@@ -6,12 +6,16 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.CalendarContract
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Telephony
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 data class FileSearchResult(
     val id: Long,
@@ -54,6 +58,36 @@ data class CalendarSearchResult(
 
 object LocalSearchManager {
 
+    private fun hasImagesPermission(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun hasVideoPermission(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun hasAudioPermission(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     private fun queryMediaUri(
         context: Context,
         uri: Uri,
@@ -62,6 +96,14 @@ object LocalSearchManager {
     ): List<FileSearchResult> {
         val trimmed = query.trim()
         if (trimmed.length < 2) return emptyList()
+
+        val isPermitted = when (uri) {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI -> hasImagesPermission(context)
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI -> hasVideoPermission(context)
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI -> hasAudioPermission(context)
+            else -> hasImagesPermission(context) || hasVideoPermission(context) || hasAudioPermission(context)
+        }
+        if (!isPermitted) return emptyList()
 
         val results = mutableListOf<FileSearchResult>()
         val resolver: ContentResolver = context.contentResolver
@@ -112,26 +154,49 @@ object LocalSearchManager {
         return results
     }
 
-    fun searchFiles(context: Context, query: String, limit: Int = 10): List<FileSearchResult> {
-        val results = mutableListOf<FileSearchResult>()
-        val uris = listOf(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            MediaStore.Files.getContentUri("external")
-        )
+    suspend fun searchFiles(context: Context, query: String, limit: Int = 10): List<FileSearchResult> = coroutineScope {
+        val trimmed = query.trim()
+        if (trimmed.length < 2) return@coroutineScope emptyList()
+
+        val canReadImages = hasImagesPermission(context)
+        val canReadVideo = hasVideoPermission(context)
+        val canReadAudio = hasAudioPermission(context)
+
+        if (!canReadImages && !canReadVideo && !canReadAudio) {
+            return@coroutineScope emptyList()
+        }
+
+        val uris = mutableListOf<Uri>()
+        if (canReadImages) {
+            uris.add(MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+        }
+        if (canReadVideo) {
+            uris.add(MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+        }
+        if (canReadAudio) {
+            uris.add(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+        }
+        uris.add(MediaStore.Files.getContentUri("external"))
         
-        for (uri in uris) {
-            if (results.size >= limit) break
-            val r = queryMediaUri(context, uri, query, limit)
+        val queryJobs = uris.map { uri ->
+            async {
+                queryMediaUri(context, uri, query, limit)
+            }
+        }
+        
+        val allResults = queryJobs.awaitAll()
+        val results = mutableListOf<FileSearchResult>()
+        for (r in allResults) {
             for (item in r) {
+                if (results.size >= limit) break
                 if (results.none { it.path == item.path }) {
                     results.add(item)
                 }
             }
+            if (results.size >= limit) break
         }
         
-        return results.take(limit)
+        results.take(limit)
     }
 
     fun searchContacts(context: Context, query: String, limit: Int = 8): List<ContactSearchResult> {

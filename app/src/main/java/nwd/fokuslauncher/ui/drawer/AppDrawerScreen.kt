@@ -491,7 +491,14 @@ private fun DrawerAppListColumn(
     }
 
     val permissionsToRequest = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_AUDIO,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(
                 Manifest.permission.READ_MEDIA_IMAGES,
                 Manifest.permission.READ_MEDIA_VIDEO,
@@ -502,11 +509,28 @@ private fun DrawerAppListColumn(
         }
     }
 
-    val hasStoragePermission = remember(permissionCheckTrigger, uiState.searchQuery) {
-        permissionsToRequest.all {
-            ContextCompat.checkSelfPermission(drawerContext, it) == PackageManager.PERMISSION_GRANTED
+    val hasVisualMediaPermission = remember(permissionCheckTrigger, uiState.searchQuery) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            (ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED &&
+             ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED) ||
+             ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
     }
+
+    val hasAudioMediaPermission = remember(permissionCheckTrigger, uiState.searchQuery) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    val hasStoragePermission = hasVisualMediaPermission || hasAudioMediaPermission
 
     LazyColumn(state = listState, modifier = modifier) {
         if (uiState.searchQuery.isNotBlank()) {
@@ -738,6 +762,8 @@ private fun DrawerAppListColumn(
                 messageResults = uiState.messageResults,
                 calendarResults = uiState.calendarResults,
                 hasStoragePermission = hasStoragePermission,
+                hasVisualMediaPermission = hasVisualMediaPermission,
+                hasAudioMediaPermission = hasAudioMediaPermission,
                 onRequestStoragePermission = {
                     permissionLauncher.launch(permissionsToRequest)
                 },

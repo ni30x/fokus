@@ -49,6 +49,7 @@ import nwd.fokuslauncher.data.model.serializeHomeExtraWidgets
 import nwd.fokuslauncher.data.model.serializeHostedWidgets
 import nwd.fokuslauncher.data.model.serializeWorldClockCities
 import nwd.fokuslauncher.data.model.ShortcutTarget
+import nwd.fokuslauncher.data.util.AppLocaleHelper
 import nwd.fokuslauncher.utils.WallpaperHelper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -990,6 +991,7 @@ class PreferencesManager @Inject constructor(@param:ApplicationContext private v
             if (trimmed.isEmpty()) prefs.remove(APP_LOCALE_TAG_KEY)
             else prefs[APP_LOCALE_TAG_KEY] = trimmed
         }
+        AppLocaleHelper.cacheLocaleTag(context, trimmed)
     }
 
     // --- Screen rotation ---

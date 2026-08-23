@@ -40,6 +40,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Named
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1035,22 +1037,6 @@ constructor(
                     val appChips = if (query.isNotBlank()) AppTargetChips.getChips() else emptyList()
                     val settingsRes = SystemSettingsSearch.search(query)
 
-                    var filesRes = emptyList<FileSearchResult>()
-                    var contactsRes = emptyList<ContactSearchResult>()
-                    var callLogsRes = emptyList<CallLogSearchResult>()
-                    var msgsRes = emptyList<MessageSearchResult>()
-                    var calRes = emptyList<CalendarSearchResult>()
-
-                    if (query.trim().length >= 2) {
-                        withContext(Dispatchers.IO) {
-                            filesRes = LocalSearchManager.searchFiles(context, query)
-                            contactsRes = LocalSearchManager.searchContacts(context, query)
-                            callLogsRes = LocalSearchManager.searchCallLogs(context, query)
-                            msgsRes = LocalSearchManager.searchMessages(context, query)
-                            calRes = LocalSearchManager.searchCalendar(context, query)
-                        }
-                    }
-
                     _uiState.update { state ->
                         if (requestId != searchQueryRequestId || state.searchQuery != query) {
                             state
@@ -1059,12 +1045,52 @@ constructor(
                                     quickActionResult = quickAction,
                                     targetAppChips = appChips,
                                     settingsResults = settingsRes,
-                                    fileResults = filesRes,
-                                    contactResults = contactsRes,
-                                    callLogResults = callLogsRes,
-                                    messageResults = msgsRes,
-                                    calendarResults = calRes
+                                    fileResults = emptyList(),
+                                    contactResults = emptyList(),
+                                    callLogResults = emptyList(),
+                                    messageResults = emptyList(),
+                                    calendarResults = emptyList()
                             )
+                        }
+                    }
+
+                    if (query.trim().length >= 2) {
+                        delay(200)
+                        if (requestId != searchQueryRequestId) return@launch
+
+                        var filesRes = emptyList<FileSearchResult>()
+                        var contactsRes = emptyList<ContactSearchResult>()
+                        var callLogsRes = emptyList<CallLogSearchResult>()
+                        var msgsRes = emptyList<MessageSearchResult>()
+                        var calRes = emptyList<CalendarSearchResult>()
+
+                        withContext(Dispatchers.IO) {
+                            val filesDeferred = async { LocalSearchManager.searchFiles(context, query) }
+                            val contactsDeferred = async { LocalSearchManager.searchContacts(context, query) }
+                            val callLogsDeferred = async { LocalSearchManager.searchCallLogs(context, query) }
+                            val msgsDeferred = async { LocalSearchManager.searchMessages(context, query) }
+                            val calDeferred = async { LocalSearchManager.searchCalendar(context, query) }
+
+                            awaitAll(filesDeferred, contactsDeferred, callLogsDeferred, msgsDeferred, calDeferred)
+                            filesRes = filesDeferred.await()
+                            contactsRes = contactsDeferred.await()
+                            callLogsRes = callLogsDeferred.await()
+                            msgsRes = msgsDeferred.await()
+                            calRes = calDeferred.await()
+                        }
+
+                        _uiState.update { state ->
+                            if (requestId != searchQueryRequestId || state.searchQuery != query) {
+                                state
+                            } else {
+                                state.copy(
+                                        fileResults = filesRes,
+                                        contactResults = contactsRes,
+                                        callLogResults = callLogsRes,
+                                        messageResults = msgsRes,
+                                        calendarResults = calRes
+                                )
+                            }
                         }
                     }
                 }

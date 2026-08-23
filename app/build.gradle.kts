@@ -216,6 +216,7 @@ dependencies {
     implementation(libs.androidx.media)
     implementation(libs.google.material)
     implementation(libs.coil.compose)
+    implementation(libs.coil.video)
 
     // Compose
     implementation(platform(libs.androidx.compose.bom))

@@ -1,7 +1,10 @@
 package nwd.fokuslauncher.ui.drawer
 
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
+import coil.request.ImageRequest
+import coil.request.videoFrameMillis
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -143,6 +146,8 @@ fun LazyListScope.universalSearchResults(
     messageResults: List<MessageSearchResult>,
     calendarResults: List<CalendarSearchResult>,
     hasStoragePermission: Boolean = true,
+    hasVisualMediaPermission: Boolean = true,
+    hasAudioMediaPermission: Boolean = true,
     onRequestStoragePermission: () -> Unit = {},
     onCloseDrawer: () -> Unit
 ) {
@@ -272,7 +277,8 @@ fun LazyListScope.universalSearchResults(
         }
     }
 
-    if (!hasStoragePermission) {
+    val hasAnyStoragePermission = hasStoragePermission && (hasVisualMediaPermission || hasAudioMediaPermission)
+    if (!hasAnyStoragePermission && fileResults.isEmpty()) {
         item(key = "hdr_files_permission") {
             DrawerListSectionHeader(text = "Local Files")
         }
@@ -327,21 +333,36 @@ fun LazyListScope.universalSearchResults(
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (file.mimeType?.startsWith("image") == true) {
+                    if (file.mimeType?.startsWith("image") == true ||
+                        file.mimeType?.startsWith("video") == true) {
+                        val isVideo = file.mimeType?.startsWith("video") == true
+                        val imageRequest = ImageRequest.Builder(LocalContext.current)
+                            .data(file.uri)
+                            .crossfade(true)
+                            .apply {
+                                if (isVideo) {
+                                    videoFrameMillis(1000)
+                                }
+                            }
+                            .build()
+                        val fallbackPainter = rememberVectorPainter(
+                            if (isVideo) Icons.Default.VideoFile else Icons.Default.InsertDriveFile
+                        )
                         coil.compose.AsyncImage(
-                            model = file.uri,
+                            model = imageRequest,
                             contentDescription = file.displayName,
+                            placeholder = fallbackPainter,
+                            error = fallbackPainter,
                             modifier = Modifier
                                 .size(32.dp)
-                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentScale = ContentScale.Crop
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                     } else {
                         Icon(
                             imageVector = when {
                                 file.mimeType?.startsWith("audio") == true -> Icons.Default.AudioFile
-                                file.mimeType?.startsWith("video") == true -> Icons.Default.VideoFile
                                 file.mimeType?.contains("pdf") == true -> Icons.Default.PictureAsPdf
                                 else -> Icons.Default.InsertDriveFile
                             },
