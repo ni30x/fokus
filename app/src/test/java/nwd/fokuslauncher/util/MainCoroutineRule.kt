@@ -2,7 +2,8 @@ package nwd.fokuslauncher.util
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.rules.TestWatcher
@@ -10,12 +11,11 @@ import org.junit.runner.Description
 
 /**
  * A JUnit [TestWatcher] that replaces [Dispatchers.Main] with a
- * [StandardTestDispatcher] for the duration of each test.
+ * [TestDispatcher] for the duration of each test.
  *
- * [StandardTestDispatcher] queues coroutines without executing them eagerly.
- * You must call [advanceUntilIdle][kotlinx.coroutines.test.TestCoroutineScheduler.advanceUntilIdle]
- * (or [runTest][kotlinx.coroutines.test.runTest]) to flush pending work
- * before asserting.
+ * By default uses [UnconfinedTestDispatcher], which executes coroutines
+ * eagerly so state updates are visible immediately after the triggering
+ * call — assertions do not need `advanceUntilIdle()`.
  *
  * Usage:
  * ```kotlin
@@ -29,14 +29,16 @@ import org.junit.runner.Description
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainCoroutineRule(
-    val testDispatcher: StandardTestDispatcher = StandardTestDispatcher(),
+    val testDispatcher: TestDispatcher = UnconfinedTestDispatcher(),
 ) : TestWatcher() {
 
     override fun starting(description: Description) {
+        super.starting(description)
         Dispatchers.setMain(testDispatcher)
     }
 
     override fun finished(description: Description) {
+        super.finished(description)
         Dispatchers.resetMain()
     }
 }
