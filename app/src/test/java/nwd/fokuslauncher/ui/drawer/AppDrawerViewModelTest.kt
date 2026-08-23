@@ -181,6 +181,7 @@ class AppDrawerViewModelTest {
     ) {
         val timeoutAt = System.currentTimeMillis() + 1500
         while (System.currentTimeMillis() < timeoutAt) {
+            testDispatcher.scheduler.advanceUntilIdle()
             if (predicate(viewModel.uiState.value)) return
             Thread.sleep(10)
         }

@@ -295,7 +295,7 @@ class HomeViewModelTest {
         every { preferencesManager.favoritesFlow } returns favoritesFlow
 
         val viewModel = createViewModel()
-        CoroutineScope(testDispatcher).launch { viewModel.favorites.collect { } }
+        val collectJob = CoroutineScope(testDispatcher).launch { viewModel.favorites.collect { } }
         testDispatcher.scheduler.advanceUntilIdle()
 
         viewModel.hideApp(workFavorite)
@@ -305,6 +305,7 @@ class HomeViewModelTest {
             appRepository.hideApp("com.lu4p.chrome", "42", HOST_APP_METADATA_SENTINEL)
         }
         coVerify { preferencesManager.setFavorites(listOf(personalFavorite)) }
+        collectJob.cancel()
     }
 
     @Test
@@ -425,8 +426,7 @@ class HomeViewModelTest {
         val collectJob = CoroutineScope(testDispatcher).launch {
             viewModel.favorites.collect { collected += it }
         }
-        testDispatcher.scheduler.advanceTimeBy(200)
-        testDispatcher.scheduler.runCurrent()
+        testDispatcher.scheduler.advanceUntilIdle()
 
         val favorites = collected.lastOrNull().orEmpty()
         assertEquals(3, favorites.size)
