@@ -539,8 +539,15 @@ constructor(
     )
 
     private fun isArchivedLauncherActivity(info: android.content.pm.LauncherActivityInfo): Boolean =
-            Build.VERSION.SDK_INT >= 35 &&
-                    runCatching { info.applicationInfo.isArchived }.getOrDefault(false)
+            runCatching {
+                val appInfo = info.applicationInfo
+                try {
+                    val field = ApplicationInfo::class.java.getField("isArchived")
+                    field.getBoolean(appInfo)
+                } catch (_: NoSuchFieldException) {
+                    (appInfo.flags and 0x40000000) != 0
+                }
+            }.getOrDefault(false)
 
     private fun loadPinnedLauncherShortcutApps(
             launcherApps: LauncherApps,

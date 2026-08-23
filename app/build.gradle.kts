@@ -194,6 +194,9 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            all {
+                it.jvmArgs("-XX:+EnableDynamicAgentLoading", "-Djdk.attach.allowAttachSelf=true")
+            }
         }
     }
 
@@ -209,7 +212,10 @@ android {
     }
 }
 
+val byteBuddyAgent by configurations.creating
+
 dependencies {
+    byteBuddyAgent("net.bytebuddy:byte-buddy-agent:1.15.11")
     // Core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
@@ -266,4 +272,28 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     androidTestImplementation(libs.hilt.android.testing)
     kspAndroidTest(libs.hilt.compiler)
+}
+
+abstract class ByteBuddyAgentArgumentProvider @javax.inject.Inject constructor(
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NONE)
+    val agentFiles: FileCollection
+) : CommandLineArgumentProvider {
+    override fun asArguments(): Iterable<String> {
+        val file = agentFiles.files.firstOrNull() ?: return emptyList()
+        return listOf("-javaagent:${file.absolutePath}")
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    jvmArgumentProviders.add(
+        objects.newInstance(ByteBuddyAgentArgumentProvider::class, byteBuddyAgent)
+    )
+    jvmArgs(
+        "-XX:+EnableDynamicAgentLoading",
+        "-Djdk.attach.allowAttachSelf=true",
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+        "--add-opens=java.base/java.util=ALL-UNNAMED"
+    )
 }

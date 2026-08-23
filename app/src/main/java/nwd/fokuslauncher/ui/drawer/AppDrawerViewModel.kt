@@ -1066,8 +1066,9 @@ constructor(
                         if (allFiltered.size == 1) {
                             val target =
                                     launchTargetFromAppInfo(allFiltered[0], privateSpaceManager)
-                            launchTarget(target)
-                            resetSearchState()
+                            if (launchTarget(target)) {
+                                resetSearchState()
+                            }
                             return@launch
                         }
                     }
@@ -1926,7 +1927,7 @@ constructor(
         val filterQuery =
                 if (DotSearchSyntax.isPossibleDotSearchPrefix(trimmed)) "" else trimmed
         val searchActive = filterQuery.isNotBlank()
-        val globalSearch = searchActive
+        val globalSearch = searchActive && useSidebarCategoryDrawer
         val appsForFilter = if (globalSearch) latestSearchableApps else allApps
         val effectiveCategory =
                 if (globalSearch) ReservedCategoryNames.ALL_APPS else category

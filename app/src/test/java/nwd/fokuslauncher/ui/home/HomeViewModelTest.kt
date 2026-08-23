@@ -36,8 +36,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.mockkObject
-import io.mockk.unmockkObject
+import io.mockk.spyk
 import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,7 +56,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -66,6 +65,7 @@ import java.util.TimeZone
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
 class HomeViewModelTest {
 
     private lateinit var context: Context
@@ -148,7 +148,11 @@ class HomeViewModelTest {
 
         // Mock repository flows used by name resolution
         every { appRepository.getAllRenamedApps() } returns flowOf(emptyList())
+        every { appRepository.getHiddenApps() } returns flowOf(emptyList())
+        every { appRepository.getInstalledAppsVersion() } returns MutableStateFlow(0L)
+        every { appRepository.getAllAppCategories() } returns flowOf(emptyList())
         every { appRepository.getInstalledApps() } returns emptyList()
+        every { appRepository.getArchivedApps() } returns emptyList()
         every { appRepository.getAllShortcutActions() } returns emptyList()
         every { appRepository.getLaunchableAppKeys(any()) } returns emptySet()
         every { appRepository.getRemovedPackages() } returns removedPackages
@@ -186,41 +190,19 @@ class HomeViewModelTest {
      * to different [Context.registerReceiver] overloads by API (including the 5-arg form on API 33+).
      */
     private fun stubNullReceiverBatterySticky(intent: Intent?) {
-        every { context.registerReceiver(null, any()) } returns intent
-        every { context.registerReceiver(null, any(), any()) } returns intent
-        every { context.registerReceiver(null, any(), any(), any()) } returns intent
-        every { context.registerReceiver(null, any(), any(), any(), any()) } returns intent
+        every { context.registerReceiver(null, any<IntentFilter>()) } returns intent
+        every { context.registerReceiver(null, any<IntentFilter>(), any<Int>()) } returns intent
+        every { context.registerReceiver(null, any<IntentFilter>(), any<String>(), any<android.os.Handler>()) } returns intent
+        every { context.registerReceiver(null, any<IntentFilter>(), any<String>(), any<android.os.Handler>(), any<Int>()) } returns intent
     }
 
-    /** Real app context is required for [DateFormat.getTimeFormat]; battery sticky read is mocked. */
     private fun contextForClockAndBattery(batterySticky: Intent): Context {
-        val base = RuntimeEnvironment.getApplication().applicationContext
-        return object : ContextWrapper(base) {
-            @SuppressLint("UnspecifiedRegisterReceiverFlag")
-            override fun registerReceiver(
-                receiver: BroadcastReceiver?,
-                filter: IntentFilter
-            ): Intent? =
-                if (receiver == null) batterySticky
-                else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    super.registerReceiver(
-                        receiver,
-                        filter,
-                        RECEIVER_NOT_EXPORTED
-                    )
-                } else {
-                    @Suppress("DEPRECATION")
-                    super.registerReceiver(receiver, filter)
-                }
-
-            override fun registerReceiver(
-                receiver: BroadcastReceiver?,
-                filter: IntentFilter,
-                flags: Int
-            ): Intent? =
-                if (receiver == null) batterySticky
-                else super.registerReceiver(receiver, filter, flags)
-        }
+        val mockCtx = spyk(org.robolectric.RuntimeEnvironment.getApplication())
+        every { mockCtx.registerReceiver(null, any<IntentFilter>()) } returns batterySticky
+        every { mockCtx.registerReceiver(null, any<IntentFilter>(), any<Int>()) } returns batterySticky
+        every { mockCtx.registerReceiver(null, any<IntentFilter>(), any<String>(), any<android.os.Handler>()) } returns batterySticky
+        every { mockCtx.registerReceiver(null, any<IntentFilter>(), any<String>(), any<android.os.Handler>(), any<Int>()) } returns batterySticky
+        return mockCtx
     }
 
     private fun mockBatteryStickyIntent(level: Int = 75, scale: Int = 100): Intent {
@@ -490,15 +472,17 @@ class HomeViewModelTest {
 
     @Test
     fun `initial state reads battery from sticky system broadcast`() {
-        val realContext = RuntimeEnvironment.getApplication().applicationContext as Context
         val batteryIntent = Intent(Intent.ACTION_BATTERY_CHANGED).apply {
             putExtra(BatteryManager.EXTRA_LEVEL, 42)
             putExtra(BatteryManager.EXTRA_SCALE, 100)
         }
-        @Suppress("DEPRECATION")
-        realContext.sendStickyBroadcast(batteryIntent)
+        val mockCtx = mockk<Context>(relaxed = true)
+        every { mockCtx.registerReceiver(null, any()) } returns batteryIntent
+        every { mockCtx.registerReceiver(null, any(), any()) } returns batteryIntent
+        every { mockCtx.registerReceiver(null, any(), any(), any()) } returns batteryIntent
+        every { mockCtx.registerReceiver(null, any(), any(), any(), any()) } returns batteryIntent
 
-        val viewModel = createViewModel(realContext)
+        val viewModel = createViewModel(mockCtx)
         testDispatcher.scheduler.advanceTimeBy(100)
 
         assertEquals(42, viewModel.clockUiState.value.batteryPercent)
@@ -516,12 +500,10 @@ class HomeViewModelTest {
 
     @Test
     fun `isDefaultLauncher is true when package manager resolves home to app package`() {
-        val realContext = RuntimeEnvironment.getApplication().applicationContext as Context
+        val mockCtx = mockk<Context>(relaxed = true)
         val packageManager = mockk<PackageManager>(relaxed = true)
-        val wrappedContext = object : ContextWrapper(realContext) {
-            override fun getPackageManager(): PackageManager = packageManager
-            override fun getPackageName(): String = "nwd.fokuslauncher"
-        }
+        every { mockCtx.packageManager } returns packageManager
+        every { mockCtx.packageName } returns "nwd.fokuslauncher"
         val resolveInfo = ResolveInfo().apply {
             activityInfo = ActivityInfo().apply {
                 packageName = "nwd.fokuslauncher"
@@ -529,10 +511,14 @@ class HomeViewModelTest {
             }
         }
         every {
-            packageManager.resolveActivity(any(), PackageManager.MATCH_DEFAULT_ONLY)
+            packageManager.resolveActivity(any(), any<Int>())
         } returns resolveInfo
+        val roleManager = mockk<android.app.role.RoleManager>(relaxed = true)
+        every { roleManager.isRoleHeld(android.app.role.RoleManager.ROLE_HOME) } returns true
+        every { mockCtx.getSystemService(android.app.role.RoleManager::class.java) } returns roleManager
+        every { mockCtx.getSystemService(Context.ROLE_SERVICE) } returns roleManager
 
-        val viewModel = createViewModel(wrappedContext)
+        val viewModel = createViewModel(mockCtx)
         testDispatcher.scheduler.advanceTimeBy(100)
 
         assertTrue(viewModel.uiState.value.isDefaultLauncher)
@@ -833,16 +819,20 @@ class HomeViewModelTest {
 
     @Test
     fun `onDoubleTapEmptyLock calls lockScreenIfPossible when enabled`() {
-        mockkObject(LockScreenHelper)
-        every { LockScreenHelper.isLockAccessibilityServiceEnabled(any()) } returns true
-        every { LockScreenHelper.lockScreenIfPossible() } returns true
+        var lockScreenCalled = false
+        LockScreenHelper.accessibilityEnabledOverride = { true }
+        LockScreenHelper.lockScreenOverride = {
+            lockScreenCalled = true
+            true
+        }
         every { preferencesManager.doubleTapEmptyLockFlow } returns flowOf(true)
 
         val viewModel = createViewModel()
         viewModel.onDoubleTapEmptyLock()
         testDispatcher.scheduler.runCurrent()
 
-        verify { LockScreenHelper.lockScreenIfPossible() }
-        unmockkObject(LockScreenHelper)
+        assertTrue(lockScreenCalled)
+        LockScreenHelper.accessibilityEnabledOverride = null
+        LockScreenHelper.lockScreenOverride = null
     }
 }

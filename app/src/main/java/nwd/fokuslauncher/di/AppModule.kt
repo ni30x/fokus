@@ -146,107 +146,52 @@ object AppModule {
         }
 
     fun migration3To4(
-        context: Context,
-        profileKeyResolver: (Context, String) -> Set<String> = ::resolveInstalledProfileKeys
+        context: Context? = null,
     ) =
         object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 MIGRATION_3_TO_4_NEW_TABLES.forEach(db::execSQL)
 
-                migrateByPackageName(
-                    db,
-                    context,
-                    profileKeyResolver,
-                    "SELECT packageName FROM hidden_apps",
-                ) { d, packageName, profileKey, _ ->
-                    d.execSQL(
-                        "INSERT OR REPLACE INTO `hidden_apps_new` (`packageName`, `profileKey`) VALUES (?, ?)",
-                        arrayOf(packageName, profileKey),
-                    )
+                db.query("SELECT packageName FROM hidden_apps").use { cursor ->
+                    val packageIndex = cursor.getColumnIndexOrThrow("packageName")
+                    while (cursor.moveToNext()) {
+                        val packageName = cursor.getString(packageIndex)
+                        db.execSQL(
+                            "INSERT OR REPLACE INTO `hidden_apps_new` (`packageName`, `profileKey`) VALUES (?, '0')",
+                            arrayOf(packageName),
+                        )
+                    }
                 }
 
-                migrateByPackageName(
-                    db,
-                    context,
-                    profileKeyResolver,
-                    "SELECT packageName, customName FROM renamed_apps",
-                ) { d, packageName, profileKey, c ->
-                    val customName = c.getString(c.getColumnIndexOrThrow("customName"))
-                    d.execSQL(
-                        "INSERT OR REPLACE INTO `renamed_apps_new` (`packageName`, `profileKey`, `customName`) VALUES (?, ?, ?)",
-                        arrayOf(packageName, profileKey, customName),
-                    )
+                db.query("SELECT packageName, customName FROM renamed_apps").use { cursor ->
+                    val packageIndex = cursor.getColumnIndexOrThrow("packageName")
+                    val nameIndex = cursor.getColumnIndexOrThrow("customName")
+                    while (cursor.moveToNext()) {
+                        val packageName = cursor.getString(packageIndex)
+                        val customName = cursor.getString(nameIndex)
+                        db.execSQL(
+                            "INSERT OR REPLACE INTO `renamed_apps_new` (`packageName`, `profileKey`, `customName`) VALUES (?, '0', ?)",
+                            arrayOf(packageName, customName),
+                        )
+                    }
                 }
 
-                migrateByPackageName(
-                    db,
-                    context,
-                    profileKeyResolver,
-                    "SELECT packageName, category FROM app_categories",
-                ) { d, packageName, profileKey, c ->
-                    val category = c.getString(c.getColumnIndexOrThrow("category"))
-                    d.execSQL(
-                        "INSERT OR REPLACE INTO `app_categories_new` (`packageName`, `profileKey`, `category`) VALUES (?, ?, ?)",
-                        arrayOf(packageName, profileKey, category),
-                    )
+                db.query("SELECT packageName, category FROM app_categories").use { cursor ->
+                    val packageIndex = cursor.getColumnIndexOrThrow("packageName")
+                    val categoryIndex = cursor.getColumnIndexOrThrow("category")
+                    while (cursor.moveToNext()) {
+                        val packageName = cursor.getString(packageIndex)
+                        val category = cursor.getString(categoryIndex)
+                        db.execSQL(
+                            "INSERT OR REPLACE INTO `app_categories_new` (`packageName`, `profileKey`, `category`) VALUES (?, '0', ?)",
+                            arrayOf(packageName, category),
+                        )
+                    }
                 }
 
                 MIGRATION_3_TO_4_FINALIZE.forEach(db::execSQL)
             }
         }
-
-    private inline fun migrateByPackageName(
-        db: SupportSQLiteDatabase,
-        context: Context,
-        profileKeyResolver: (Context, String) -> Set<String>,
-        sql: String,
-        crossinline onRow: (SupportSQLiteDatabase, String, String, Cursor) -> Unit,
-    ) {
-        db.query(sql).use { cursor ->
-            val packageIndex = cursor.getColumnIndexOrThrow("packageName")
-            while (cursor.moveToNext()) {
-                val packageName = cursor.getString(packageIndex)
-                for (profileKey in profileKeyResolver(context, packageName)) {
-                    onRow(db, packageName, profileKey, cursor)
-                }
-            }
-        }
-    }
-
-    private inline fun <reified T> Context.systemServiceOrNull(serviceName: String): T? =
-            try {
-                getSystemService(serviceName) as? T
-            } catch (_: Exception) {
-                null
-            }
-
-    private fun resolveInstalledProfileKeys(context: Context, packageName: String): Set<String> {
-        val privateSpaceManager = PrivateSpaceManager(context)
-        val launcherApps = context.systemServiceOrNull<LauncherApps>(LAUNCHER_APPS_SERVICE)
-        val userManager = context.systemServiceOrNull<UserManager>(USER_SERVICE)
-
-        val discovered = linkedSetOf<String>()
-        if (launcherApps != null && userManager != null) {
-            for (user in userManager.userProfiles) {
-                if (privateSpaceManager.isPrivateSpaceProfile(user)) continue
-                val hasActivities =
-                    try {
-                        launcherApps.getActivityList(packageName, user).isNotEmpty()
-                    } catch (_: Exception) {
-                        false
-                    }
-                if (hasActivities) {
-                    val profileKey =
-                        if (user == Process.myUserHandle()) "0" else appProfileKey(user)
-                    discovered += profileKey
-                }
-            }
-        }
-
-        if (discovered.isNotEmpty()) return discovered
-
-        return setOf("0")
-    }
 
     @Provides
     @Singleton
@@ -258,7 +203,6 @@ object AppModule {
             AppDatabase::class.java,
             "fokus_launcher_db"
         ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, migration3To4(context), migration4To5, migration5To6)
-         .fallbackToDestructiveMigration()
          .build()
         AppDatabase.instance = db
         return db
@@ -289,4 +233,10 @@ object AppModule {
     @Singleton
     @Named("DrawerComputation")
     fun provideDrawerComputationDispatcher(): CoroutineDispatcher = Dispatchers.Default
+
+    /** IO dispatcher for disk and network tasks; injectable in tests for determinism. */
+    @Provides
+    @Singleton
+    @Named("IoDispatcher")
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
 }

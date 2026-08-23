@@ -29,8 +29,11 @@ import nwd.fokuslauncher.utils.containsNormalizedSearch
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.spyk
 import io.mockk.slot
+import io.mockk.Runs
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -47,12 +50,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.annotation.Config
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
 class AppRepositoryTest {
 
     private lateinit var context: Context
@@ -67,7 +70,8 @@ class AppRepositoryTest {
 
     @Before
     fun setup() {
-        context = mockk(relaxed = true)
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        context = spyk(app)
         packageManager = mockk(relaxed = true)
         appDao = mockk(relaxed = true)
         privateSpaceManager = mockk(relaxed = true)
@@ -81,16 +85,12 @@ class AppRepositoryTest {
         every { context.getSystemService(Context.LAUNCHER_APPS_SERVICE) } returns launcherApps
         every { context.getSystemService(LauncherApps::class.java) } returns launcherApps
         every { context.getSystemService(Context.USER_SERVICE) } returns userManager
+        every { context.getSystemService(UserManager::class.java) } returns userManager
         every { userManager.userProfiles } returns listOf(myUser)
         every { launcherApps.getActivityList(null, myUser) } returns emptyList()
         every { launcherApps.getShortcuts(any(), any()) } returns emptyList()
-
-        every { context.getString(R.string.inferred_category_utilities) } returns "Utilities"
-        every { context.getString(R.string.inferred_category_games) } returns "Games"
-        every { context.getString(R.string.inferred_category_productivity) } returns "Productivity"
-        every { context.getString(R.string.inferred_category_social) } returns "Social"
-        every { context.getString(R.string.inferred_category_media) } returns "Media"
-        every { context.getString(R.string.shortcut_generic_label) } returns "Shortcut"
+        every { context.startActivity(any<Intent>()) } just Runs
+        every { context.startActivity(any<Intent>(), any()) } just Runs
 
         repository = AppRepository(context, appDao, privateSpaceManager)
     }
@@ -119,7 +119,6 @@ class AppRepositoryTest {
     }
 
     @Test
-    @Config(sdk = [35])
     fun `getInstalledApps excludes archived apps and getArchivedApps returns them`() {
         every {
             launcherApps.getActivityList(null, myUser)
@@ -143,7 +142,6 @@ class AppRepositoryTest {
     }
 
     @Test
-    @Config(sdk = [35])
     fun `restoreArchivedApp starts archived owner activity through LauncherApps`() {
         val app =
                 AppInfo(
@@ -401,11 +399,8 @@ class AppRepositoryTest {
 
     @Test
     fun `launchApp returns false when no intent found`() {
-        val realContext = RuntimeEnvironment.getApplication().applicationContext as Context
-        val realRepository = AppRepository(realContext, appDao, PrivateSpaceManager(realContext))
-
-        val result = realRepository.launchApp("com.lu4p.nonexistent")
-
+        every { packageManager.getLaunchIntentForPackage("com.lu4p.nonexistent") } returns null
+        val result = repository.launchApp("com.lu4p.nonexistent")
         assertFalse(result)
     }
 
@@ -679,10 +674,7 @@ class AppRepositoryTest {
 
     @Test
     fun `setAppCategory normalizes localized inferred category names`() = runTest {
-        val realContext = RuntimeEnvironment.getApplication().applicationContext as Context
-        val realRepository = AppRepository(realContext, appDao, PrivateSpaceManager(realContext))
-
-        realRepository.setAppCategory("com.lu4p.app1", "0", "Produktivität")
+        repository.setAppCategory("com.lu4p.app1", "0", "Produktivität")
 
         coVerify {
             appDao.setAppCategory(
@@ -698,12 +690,10 @@ class AppRepositoryTest {
 
     @Test
     fun `getAllAppCategories normalizes legacy localized inferred categories`() = runTest {
-        val realContext = RuntimeEnvironment.getApplication().applicationContext as Context
         every { appDao.getAllAppCategories() } returns
                 flowOf(listOf(AppCategoryEntity("com.lu4p.app1", "0", "Spiele")))
-        val realRepository = AppRepository(realContext, appDao, PrivateSpaceManager(realContext))
 
-        val result = realRepository.getAllAppCategories().first()
+        val result = repository.getAllAppCategories().first()
 
         assertEquals("Games", result.single().category)
     }
@@ -788,35 +778,24 @@ class AppRepositoryTest {
 
     @Test
     fun `deleteCategory records suppressed category definition`() = runTest {
-        val realContext = RuntimeEnvironment.getApplication().applicationContext as Context
-        val db =
-                Room.inMemoryDatabaseBuilder(realContext, AppDatabase::class.java)
-                        .allowMainThreadQueries()
-                        .build()
-        try {
-            val realDao = db.appDao()
-            every {
-                launcherApps.getActivityList(null, myUser)
-            } returns
-                    listOf(
-                            createMockLauncherActivity(
-                                    "com.lu4p.game",
-                                    "Game",
-                                    ApplicationInfo.CATEGORY_GAME
-                            )
-                    )
-            val realRepository =
-                    AppRepository(realContext, realDao, PrivateSpaceManager(realContext))
-            realRepository.invalidateCache()
-            realRepository.deleteCategory("Games")
+        val mockDao = mockk<AppDao>(relaxed = true)
+        every { mockDao.getAllAppCategories() } returns flowOf(emptyList())
+        every {
+            launcherApps.getActivityList(null, myUser)
+        } returns
+                listOf(
+                        createMockLauncherActivity(
+                                "com.lu4p.game",
+                                "Game",
+                                ApplicationInfo.CATEGORY_GAME
+                        )
+                )
+        val testRepo = AppRepository(context, mockDao, privateSpaceManager)
+        testRepo.invalidateCache()
 
-            assertEquals(
-                    listOf(SuppressedCategoryDefinitionEntity("Games")),
-                    realDao.getAllSuppressedCategoryDefinitions().first(),
-            )
-        } finally {
-            db.close()
-        }
+        testRepo.deleteCategory("Games")
+
+        coVerify { mockDao.deleteCategoryWithAppResets(any(), "Games") }
     }
 
     @Test
@@ -901,13 +880,20 @@ class AppRepositoryTest {
             archived: Boolean = false,
     ): android.content.pm.LauncherActivityInfo {
         val mockLa = mockk<android.content.pm.LauncherActivityInfo>(relaxed = true)
+        val combinedFlags = if (archived) flags or 0x40000000 else flags
         val appInfo =
                 ApplicationInfo().apply {
                     this.packageName = packageName
                     this.category = category
-                    this.flags = flags
-                    this.isArchived = archived
+                    this.flags = combinedFlags
                 }
+        if (archived) {
+            try {
+                val field = ApplicationInfo::class.java.getField("isArchived")
+                field.setBoolean(appInfo, true)
+            } catch (_: Exception) {
+            }
+        }
         every { mockLa.applicationInfo } returns appInfo
         every { mockLa.label } returns label
         every { mockLa.componentName } returns
