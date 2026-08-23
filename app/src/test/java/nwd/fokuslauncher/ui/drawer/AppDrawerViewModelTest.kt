@@ -315,6 +315,7 @@ class AppDrawerViewModelTest {
     @Test
     fun `search is case insensitive`() {
         viewModel.onSearchQueryChanged("CHROME")
+        testDispatcher.scheduler.advanceUntilIdle()
 
         // Single result triggers auto-launch, search resets
         verify { appRepository.launchApp("com.lu4p.chrome") }
@@ -323,6 +324,7 @@ class AppDrawerViewModelTest {
     @Test
     fun `single search result auto-launches the app`() {
         viewModel.onSearchQueryChanged("Atom")
+        testDispatcher.scheduler.advanceUntilIdle()
 
         // Atom is the only match, should be auto-launched
         verify { appRepository.launchApp("com.lu4p.atom") }
@@ -484,6 +486,7 @@ class AppDrawerViewModelTest {
     fun `search and category filters work together in chip drawer mode`() {
         viewModel.onCategorySelected("Productivity")
         viewModel.onSearchQueryChanged("gm")
+        testDispatcher.scheduler.advanceUntilIdle()
 
         verify { appRepository.launchApp("com.lu4p.gmail") }
     }
@@ -493,6 +496,7 @@ class AppDrawerViewModelTest {
         drawerSearchAutoLaunchFlow.value = false
         viewModel.onCategorySelected("Social")
         viewModel.onSearchQueryChanged("chrome")
+        testDispatcher.scheduler.advanceUntilIdle()
 
         assertTrue(flatFiltered(viewModel.uiState.value).isEmpty())
     }
@@ -504,6 +508,7 @@ class AppDrawerViewModelTest {
 
         viewModel.onCategorySelected("Finance")
         viewModel.onSearchQueryChanged("gmail")
+        testDispatcher.scheduler.advanceUntilIdle()
 
         verify { appRepository.launchApp("com.lu4p.gmail") }
     }
@@ -536,6 +541,7 @@ class AppDrawerViewModelTest {
 
         drawerSearchAutoLaunchFlow.value = false
         viewModel.onSearchQueryChanged("atom")
+        testDispatcher.scheduler.advanceUntilIdle()
 
         assertTrue(flatFiltered(viewModel.uiState.value).isEmpty())
     }
@@ -645,6 +651,7 @@ class AppDrawerViewModelTest {
                         userHandle = userHandle
                 )
         )
+        testDispatcher.scheduler.advanceUntilIdle()
 
         verify { privateSpaceManager.launchApp(any(), any()) }
         verify(exactly = 0) { appRepository.launchApp("com.private.app") }
