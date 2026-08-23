@@ -2,35 +2,34 @@ package nwd.fokuslauncher.util
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 
 /**
- * A JUnit [TestWatcher] that replaces [Dispatchers.Main] with a controlled
- * [UnconfinedTestDispatcher] for the duration of each test.
+ * A JUnit [TestWatcher] that replaces [Dispatchers.Main] with a
+ * [StandardTestDispatcher] for the duration of each test.
  *
- * [UnconfinedTestDispatcher] executes coroutines eagerly (no virtual-time
- * advancement required), making it ideal for ViewModel tests that push state
- * through [StateFlow] and [SharedFlow].  State updates are visible immediately
- * after the triggering call, so assertions do not need
- * `advanceUntilIdle()`.
+ * [StandardTestDispatcher] queues coroutines without executing them eagerly.
+ * You must call [advanceUntilIdle][kotlinx.coroutines.test.TestCoroutineScheduler.advanceUntilIdle]
+ * (or [runTest][kotlinx.coroutines.test.runTest]) to flush pending work
+ * before asserting.
  *
  * Usage:
  * ```kotlin
  * @get:Rule
  * val mainCoroutineRule = MainCoroutineRule()
  *
- * // Now Dispatchers.Main is replaced for the whole test class.
+ * // Dispatchers.Main is replaced for the whole test class.
  * // ViewModel constructors that accept a CoroutineDispatcher can receive
  * // mainCoroutineRule.testDispatcher directly.
  * ```
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainCoroutineRule(
-    val testDispatcher: UnconfinedTestDispatcher = UnconfinedTestDispatcher(),
+    val testDispatcher: StandardTestDispatcher = StandardTestDispatcher(),
 ) : TestWatcher() {
 
     override fun starting(description: Description) {
