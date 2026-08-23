@@ -643,6 +643,7 @@ class AppDrawerViewModelTest {
     fun `launchTarget private app delegates to private space manager`() {
         val component = ComponentName("com.private.app", "MainActivity")
         val userHandle = mockk<UserHandle>(relaxed = true)
+        every { privateSpaceManager.isPrivateSpaceProfile(userHandle) } returns true
 
         viewModel.launchTarget(
                 LaunchTarget.PrivateApp(

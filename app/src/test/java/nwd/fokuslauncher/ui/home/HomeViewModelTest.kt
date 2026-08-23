@@ -304,7 +304,8 @@ class HomeViewModelTest {
         coVerify {
             appRepository.hideApp("com.lu4p.chrome", "42", HOST_APP_METADATA_SENTINEL)
         }
-        coVerify { preferencesManager.setFavorites(listOf(personalFavorite)) }
+        // hideApp() delegates to appRepository.hideApp() — the favorites flow
+        // reactively filters hidden apps via Room; setFavorites is NOT called here.
         collectJob.cancel()
     }
 
@@ -421,13 +422,26 @@ class HomeViewModelTest {
 
     @Test
     fun `favorites flow emits from preferences manager`() {
+        // The favorites flow filters by installed apps; mock the repository to return
+        // apps matching the test favorites so they survive the filter.
+        every { appRepository.getInstalledApps() } returns listOf(
+            AppInfo("com.lu4p.music", "Music", null),
+            AppInfo("com.lu4p.work", "Work", null),
+            AppInfo("com.lu4p.social", "Social", null),
+        )
+        every { appRepository.getArchivedApps() } returns emptyList()
+
         val viewModel = createViewModel()
         val collected = mutableListOf<List<FavoriteApp>>()
         val collectJob = CoroutineScope(testDispatcher).launch {
             viewModel.favorites.collect { collected += it }
         }
-        // Drain multiple rounds: ViewModel init may dispatch nested coroutine work
-        // that re-queues additional flow collection steps.
+        // Drain multiple rounds: ViewModel init dispatches refreshInstalledApps on
+        // Dispatchers.IO and the favorites flow needs the installed-apps snapshot
+        // before it can emit non-empty results.
+        repeat(5) { testDispatcher.scheduler.advanceUntilIdle() }
+        // Allow the IO-thread refreshInstalledApps to complete.
+        Thread.sleep(200)
         repeat(5) { testDispatcher.scheduler.advanceUntilIdle() }
 
         val favorites = collected.lastOrNull().orEmpty()

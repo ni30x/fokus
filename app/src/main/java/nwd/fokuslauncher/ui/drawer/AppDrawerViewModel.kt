@@ -1054,6 +1054,24 @@ constructor(
                         }
                     }
 
+                    // Auto-launch when exactly one app matches the search query
+                    if (drawerSearchAutoLaunchEnabled &&
+                                    requestId == searchQueryRequestId &&
+                                    query.isNotBlank() &&
+                                    !DotSearchSyntax.isPossibleDotSearchPrefix(query.trimStart())
+                    ) {
+                        val allFiltered =
+                                filteredContent.filteredProfileSections.flatMap { it.apps } +
+                                        filteredContent.filteredPrivateSpaceApps
+                        if (allFiltered.size == 1) {
+                            val target =
+                                    launchTargetFromAppInfo(allFiltered[0], privateSpaceManager)
+                            launchTarget(target)
+                            resetSearchState()
+                            return@launch
+                        }
+                    }
+
                     if (query.trim().length >= 2) {
                         delay(200)
                         if (requestId != searchQueryRequestId) return@launch
