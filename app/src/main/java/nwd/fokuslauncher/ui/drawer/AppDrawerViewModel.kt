@@ -1,6 +1,17 @@
 package nwd.fokuslauncher.ui.drawer
 
+import android.Manifest
 import android.content.ComponentName
+import android.content.pm.PackageManager
+import android.net.Uri
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.isActive
+import nwd.fokuslauncher.data.database.entity.IndexedFolderEntity
+import nwd.fokuslauncher.data.search.DocumentIndexManager
+import nwd.fokuslauncher.data.search.DocumentSearchResult
+import nwd.fokuslauncher.data.search.MediaSearchResult
+import nwd.fokuslauncher.data.search.MediaType
 import android.content.Context
 import android.content.Intent
 import android.os.UserHandle
@@ -122,11 +133,16 @@ data class AppDrawerUiState(
         val quickActionResult: QuickActionResult? = null,
         val targetAppChips: List<AppSearchChip> = emptyList(),
         val settingsResults: List<SettingsSearchResult> = emptyList(),
+        val mediaResults: List<MediaSearchResult> = emptyList(),
+        val documentResults: List<DocumentSearchResult> = emptyList(),
         val fileResults: List<FileSearchResult> = emptyList(),
         val contactResults: List<ContactSearchResult> = emptyList(),
         val callLogResults: List<CallLogSearchResult> = emptyList(),
         val messageResults: List<MessageSearchResult> = emptyList(),
         val calendarResults: List<CalendarSearchResult> = emptyList(),
+        val indexedFolders: List<IndexedFolderEntity> = emptyList(),
+        val totalIndexedDocuments: Int = 0,
+        val isIndexingDocuments: Boolean = false,
 )
 
 sealed interface DrawerEvent {
@@ -280,6 +296,7 @@ constructor(
         private val privateSpaceManager: PrivateSpaceManager,
         private val preferencesManager: PreferencesManager,
         private val notificationIndicatorRepository: NotificationIndicatorRepository,
+        private val documentIndexManager: DocumentIndexManager,
         @param:Named("DrawerComputation") private val drawerComputationDispatcher: CoroutineDispatcher
 ) : ViewModel() {
 
@@ -353,6 +370,7 @@ constructor(
         observeLauncherAppearance()
         observeDrawerSearchAutoLaunch()
         observeNotificationIndicators()
+        observeIndexedFolders()
         refreshPrivateSpaceState()
         observePrivateSpaceChanges()
         scheduleDrawerCachePrewarm()
@@ -483,6 +501,42 @@ constructor(
                 }
                 scheduleDrawerCachePrewarm()
             }
+        }
+    }
+
+    private fun observeIndexedFolders() {
+        viewModelScope.launch {
+            documentIndexManager.indexedFoldersFlow.collect { folders ->
+                _uiState.update { it.copy(indexedFolders = folders) }
+            }
+        }
+        viewModelScope.launch {
+            documentIndexManager.totalDocumentCountFlow.collect { count ->
+                _uiState.update { it.copy(totalIndexedDocuments = count) }
+            }
+        }
+        viewModelScope.launch {
+            documentIndexManager.isIndexing.collect { indexing ->
+                _uiState.update { it.copy(isIndexingDocuments = indexing) }
+            }
+        }
+    }
+
+    fun addSearchFolder(treeUri: Uri) {
+        viewModelScope.launch {
+            documentIndexManager.addFolder(treeUri, context)
+        }
+    }
+
+    fun removeSearchFolder(folderId: Long, treeUriString: String?) {
+        viewModelScope.launch {
+            documentIndexManager.removeFolder(folderId, treeUriString, context)
+        }
+    }
+
+    fun reindexSearchFolders() {
+        viewModelScope.launch {
+            documentIndexManager.reindexAllFolders(context)
         }
     }
 
@@ -1045,9 +1099,11 @@ constructor(
                                     quickActionResult = quickAction,
                                     targetAppChips = appChips,
                                     settingsResults = settingsRes,
+                                    mediaResults = emptyList(),
+                                    documentResults = emptyList(),
                                     fileResults = emptyList(),
                                     contactResults = emptyList(),
-                                    callLogResults = emptyList(),
+                                    callLogResults = callLogsResOrEmpty(state, query),
                                     messageResults = emptyList(),
                                     calendarResults = emptyList()
                             )
@@ -1073,29 +1129,63 @@ constructor(
                         }
                     }
 
-                    if (query.trim().length >= 2) {
-                        delay(200)
-                        if (requestId != searchQueryRequestId) return@launch
+                    val trimmed = query.trim()
+                    if (trimmed.length >= 2) {
+                        delay(250)
+                        if (requestId != searchQueryRequestId || !isActive) return@launch
 
-                        var filesRes = emptyList<FileSearchResult>()
-                        var contactsRes = emptyList<ContactSearchResult>()
-                        var callLogsRes = emptyList<CallLogSearchResult>()
-                        var msgsRes = emptyList<MessageSearchResult>()
-                        var calRes = emptyList<CalendarSearchResult>()
+                        val (mediaRes, docRes, contactsRes, callLogsRes, msgsRes, calRes) =
+                            withContext(Dispatchers.IO) {
+                                coroutineScope {
+                                    val isMathOnly = quickAction is QuickActionResult.MathResult && !trimmed.any { it.isLetter() }
+                                    val hasDigit = trimmed.any { it.isDigit() }
+                                    val hasLetter = trimmed.any { it.isLetter() }
 
-                        withContext(Dispatchers.IO) {
-                            val filesDeferred = async { LocalSearchManager.searchFiles(context, query) }
-                            val contactsDeferred = async { LocalSearchManager.searchContacts(context, query) }
-                            val callLogsDeferred = async { LocalSearchManager.searchCallLogs(context, query) }
-                            val msgsDeferred = async { LocalSearchManager.searchMessages(context, query) }
-                            val calDeferred = async { LocalSearchManager.searchCalendar(context, query) }
+                                    // Media query: only if not purely mathematical and media permission is available
+                                    val mediaDeferred = if (!isMathOnly && (LocalSearchManager.hasVisualMediaPermission(context) || LocalSearchManager.hasAudioPermission(context))) {
+                                        async { LocalSearchManager.searchMedia(context, trimmed) }
+                                    } else null
 
-                            awaitAll(filesDeferred, contactsDeferred, callLogsDeferred, msgsDeferred, calDeferred)
-                            filesRes = filesDeferred.await()
-                            contactsRes = contactsDeferred.await()
-                            callLogsRes = callLogsDeferred.await()
-                            msgsRes = msgsDeferred.await()
-                            calRes = calDeferred.await()
+                                    // Document query: only if folders are indexed and not math-only
+                                    val docsDeferred = if (!isMathOnly && _uiState.value.indexedFolders.isNotEmpty()) {
+                                        async { documentIndexManager.searchDocuments(trimmed) }
+                                    } else null
+
+                                    // Contacts query: check permission and relevance
+                                    val contactsDeferred = if (!isMathOnly && ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+                                        async { LocalSearchManager.searchContacts(context, trimmed) }
+                                    } else null
+
+                                    // Call logs query: requires READ_CALL_LOG permission and relevant search (phone number or name)
+                                    val callLogsDeferred = if (!isMathOnly && ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED) {
+                                        async { LocalSearchManager.searchCallLogs(context, trimmed) }
+                                    } else null
+
+                                    // SMS Messages query: requires READ_SMS permission
+                                    val msgsDeferred = if (!isMathOnly && ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
+                                        async { LocalSearchManager.searchMessages(context, trimmed) }
+                                    } else null
+
+                                    // Calendar query: requires READ_CALENDAR permission
+                                    val calDeferred = if (!isMathOnly && ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED) {
+                                        async { LocalSearchManager.searchCalendar(context, trimmed) }
+                                    } else null
+
+                                    val media = mediaDeferred?.await() ?: emptyList()
+                                    val docs = docsDeferred?.await() ?: emptyList()
+                                    val contacts = contactsDeferred?.await() ?: emptyList()
+                                    val callLogs = callLogsDeferred?.await() ?: emptyList()
+                                    val msgs = msgsDeferred?.await() ?: emptyList()
+                                    val cal = calDeferred?.await() ?: emptyList()
+
+                                    ResultsBundle(media, docs, contacts, callLogs, msgs, cal)
+                                }
+                            }
+
+                        if (requestId != searchQueryRequestId || !isActive) return@launch
+
+                        val filesRes = mediaRes.map {
+                            FileSearchResult(it.id, it.displayName, it.uri.toString(), it.sizeBytes, it.uri, it.mimeType)
                         }
 
                         _uiState.update { state ->
@@ -1103,6 +1193,8 @@ constructor(
                                 state
                             } else {
                                 state.copy(
+                                        mediaResults = mediaRes,
+                                        documentResults = docRes,
                                         fileResults = filesRes,
                                         contactResults = contactsRes,
                                         callLogResults = callLogsRes,
@@ -1114,6 +1206,17 @@ constructor(
                     }
                 }
     }
+
+    private data class ResultsBundle(
+        val media: List<MediaSearchResult>,
+        val docs: List<DocumentSearchResult>,
+        val contacts: List<ContactSearchResult>,
+        val callLogs: List<CallLogSearchResult>,
+        val msgs: List<MessageSearchResult>,
+        val cal: List<CalendarSearchResult>
+    )
+
+    private fun callLogsResOrEmpty(state: AppDrawerUiState, query: String): List<CallLogSearchResult> = emptyList()
 
     /**
      * Executes default web/browser search for the typed query string (used on soft keyboard Enter/Return).

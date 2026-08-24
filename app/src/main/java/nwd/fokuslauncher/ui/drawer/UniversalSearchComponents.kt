@@ -1,11 +1,5 @@
 package nwd.fokuslauncher.ui.drawer
 
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
-import androidx.compose.ui.layout.ContentScale
-import coil.request.ImageRequest
-import coil.request.videoFrameMillis
-
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -16,20 +10,31 @@ import android.provider.CallLog
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
+import coil.request.videoFrameMillis
+import coil.size.Scale
+import coil.size.Size
+import nwd.fokuslauncher.data.database.entity.IndexedFolderEntity
 import nwd.fokuslauncher.data.search.*
 import java.text.DateFormat
 import java.util.Date
@@ -137,27 +142,85 @@ fun InLineQuickActionCard(
     }
 }
 
+enum class MediaPermissionStatus {
+    GRANTED,
+    PARTIAL,
+    REQUIRED,
+    DENIED
+}
+
 fun LazyListScope.universalSearchResults(
     context: Context,
     settingsResults: List<SettingsSearchResult>,
-    fileResults: List<FileSearchResult>,
+    mediaResults: List<MediaSearchResult>,
+    documentResults: List<DocumentSearchResult>,
+    fileResults: List<FileSearchResult> = emptyList(),
     contactResults: List<ContactSearchResult>,
     callLogResults: List<CallLogSearchResult>,
     messageResults: List<MessageSearchResult>,
     calendarResults: List<CalendarSearchResult>,
-    hasStoragePermission: Boolean = true,
-    hasVisualMediaPermission: Boolean = true,
-    hasAudioMediaPermission: Boolean = true,
-    onRequestStoragePermission: () -> Unit = {},
+    indexedFolders: List<IndexedFolderEntity> = emptyList(),
+    totalIndexedDocuments: Int = 0,
+    isIndexingDocuments: Boolean = false,
+    mediaPermissionStatus: MediaPermissionStatus = MediaPermissionStatus.GRANTED,
+    hasAnyMatches: Boolean = true,
+    searchQuery: String = "",
+    onRequestMediaPermission: () -> Unit = {},
+    onOpenAppSettings: () -> Unit = {},
+    onChooseFolder: () -> Unit = {},
+    onOpenManageFolders: () -> Unit = {},
     onCloseDrawer: () -> Unit
 ) {
+    // 0. Empty State / No Results
+    if (!hasAnyMatches && searchQuery.isNotBlank()) {
+        item(key = "no_results_card", contentType = "no_results") {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SearchOff,
+                        contentDescription = "No results",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(44.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "No results",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "No matches found for \"$searchQuery\"",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        }
+    }
+
+    // 1. Settings Results
     if (settingsResults.isNotEmpty()) {
-        item(key = "hdr_settings_results") {
+        item(key = "hdr_settings_results", contentType = "header") {
             DrawerListSectionHeader(text = "System Settings")
         }
         items(
             count = settingsResults.size,
-            key = { index -> "setting_${settingsResults[index].id}" }
+            key = { index -> "setting_${settingsResults[index].id}" },
+            contentType = { "setting_result" }
         ) { index ->
             val item = settingsResults[index]
             Surface(
@@ -171,7 +234,7 @@ fun LazyListScope.universalSearchResults(
                             context.startActivity(intent)
                             onCloseDrawer()
                         } catch (e: Exception) {
-                            Toast.makeText(context, "Cannot open ${item.title}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Cannot open setting", Toast.LENGTH_SHORT).show()
                         }
                     }
                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -193,9 +256,7 @@ fun LazyListScope.universalSearchResults(
                         Text(
                             text = item.subtitle,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -203,13 +264,310 @@ fun LazyListScope.universalSearchResults(
         }
     }
 
+    // 2. Media Results (Scoped MediaStore: Images, Videos, Audio)
+    when (mediaPermissionStatus) {
+        MediaPermissionStatus.REQUIRED -> {
+            item(key = "hdr_media_permission_required", contentType = "header") {
+                DrawerListSectionHeader(text = "Media")
+            }
+            item(key = "media_permission_required_card", contentType = "permission_card") {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onRequestMediaPermission() }
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PermMedia,
+                            contentDescription = "Media access required",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Media access required",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Allow access to search photos, videos, and music",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        MediaPermissionStatus.DENIED -> {
+            item(key = "hdr_media_permission_denied", contentType = "header") {
+                DrawerListSectionHeader(text = "Media")
+            }
+            item(key = "media_permission_denied_card", contentType = "permission_card") {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenAppSettings() }
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PermMedia,
+                            contentDescription = "Permission denied",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Permission denied",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Media permission denied. Tap to open app settings and enable access.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        MediaPermissionStatus.PARTIAL -> {
+            item(key = "hdr_media_partial", contentType = "header") {
+                DrawerListSectionHeader(text = "Media")
+            }
+            item(key = "media_partial_banner", contentType = "partial_media_banner") {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Partial access",
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Some media selected / partial access",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Only selected photos and videos are searchable",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = onRequestMediaPermission,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("Select more", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+            if (mediaResults.isNotEmpty()) {
+                items(
+                    count = mediaResults.size,
+                    key = { index -> "media_${mediaResults[index].id}_${mediaResults[index].mediaType}" },
+                    contentType = { "media_result" }
+                ) { index ->
+                    val media = mediaResults[index]
+                    MediaResultRow(media = media, context = context, onCloseDrawer = onCloseDrawer)
+                }
+            }
+        }
+        MediaPermissionStatus.GRANTED -> {
+            if (mediaResults.isNotEmpty()) {
+                item(key = "hdr_media_results", contentType = "header") {
+                    DrawerListSectionHeader(text = "Media")
+                }
+                items(
+                    count = mediaResults.size,
+                    key = { index -> "media_${mediaResults[index].id}_${mediaResults[index].mediaType}" },
+                    contentType = { "media_result" }
+                ) { index ->
+                    val media = mediaResults[index]
+                    MediaResultRow(media = media, context = context, onCloseDrawer = onCloseDrawer)
+                }
+            }
+        }
+    }
+
+    // 3. Documents & Files (Storage Access Framework Index)
+    item(key = "hdr_documents_results", contentType = "header") {
+        DrawerListSectionHeader(text = "Documents & Files")
+    }
+
+    if (indexedFolders.isEmpty()) {
+        item(key = "choose_folders_cta", contentType = "choose_folders_cta") {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onChooseFolder() }
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CreateNewFolder,
+                        contentDescription = "Choose Folders",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Choose folders/files for document search",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Select folders like Documents or Downloads to index documents locally",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    } else {
+        item(key = "folders_status_bar", contentType = "folders_status") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = if (isIndexingDocuments) "Indexing documents..." else "$totalIndexedDocuments documents indexed",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = onChooseFolder,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Folder",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add Folder", style = MaterialTheme.typography.labelMedium)
+                    }
+                    TextButton(
+                        onClick = onOpenManageFolders,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text("Manage", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+
+        if (documentResults.isNotEmpty()) {
+            items(
+                count = documentResults.size,
+                key = { index -> "doc_${documentResults[index].id}" },
+                contentType = { "doc_result" }
+            ) { index ->
+                val doc = documentResults[index]
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(doc.uri, doc.mimeType)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(intent)
+                                onCloseDrawer()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Cannot open document", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = getDocumentIcon(doc.mimeType, doc.displayName),
+                            contentDescription = doc.displayName,
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = doc.displayName,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = buildString {
+                                    append(formatFileSize(doc.sizeBytes))
+                                    if (doc.lastModified > 0) {
+                                        append(" • ")
+                                        append(DateFormat.getDateInstance(DateFormat.SHORT).format(Date(doc.lastModified)))
+                                    }
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Contacts Results
     if (contactResults.isNotEmpty()) {
-        item(key = "hdr_contacts_results") {
+        item(key = "hdr_contacts_results", contentType = "header") {
             DrawerListSectionHeader(text = "Contacts")
         }
         items(
             count = contactResults.size,
-            key = { index -> "contact_${contactResults[index].id}" }
+            key = { index -> "contact_${contactResults[index].id}" },
+            contentType = { "contact_result" }
         ) { index ->
             val contact = contactResults[index]
             Surface(
@@ -217,27 +575,59 @@ fun LazyListScope.universalSearchResults(
                     .fillMaxWidth()
                     .clickable {
                         try {
-                            val intent = if (!contact.phoneNumber.isNull_or_blank()) {
-                                Intent(Intent.ACTION_DIAL, Uri.parse("tel:${contact.phoneNumber}"))
-                            } else {
-                                Intent(Intent.ACTION_VIEW, Uri.withAppendedPath(android.provider.ContactsContract.Contacts.CONTENT_URI, contact.id))
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                data = Uri.withAppendedPath(android.provider.ContactsContract.Contacts.CONTENT_URI, contact.id)
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
                             }
-                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
                             context.startActivity(intent)
                             onCloseDrawer()
                         } catch (e: Exception) {
-                            Toast.makeText(context, "Cannot open contact", Toast.LENGTH_SHORT).show()
+                            if (!contact.phoneNumber.isNullOrEmpty()) {
+                                val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${contact.phoneNumber}")).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(intent)
+                                onCloseDrawer()
+                            }
                         }
                     }
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = contact.displayName,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.size(24.dp)
-                    )
+                    if (contact.photoUri != null) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(contact.photoUri)
+                                .size(120, 120)
+                                .scale(Scale.FILL)
+                                .memoryCachePolicy(CachePolicy.ENABLED)
+                                .diskCachePolicy(CachePolicy.ENABLED)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = contact.displayName,
+                            placeholder = rememberVectorPainter(Icons.Default.Person),
+                            error = rememberVectorPainter(Icons.Default.Person),
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Surface(
+                            modifier = Modifier.size(40.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = contact.displayName,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.width(16.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -277,127 +667,15 @@ fun LazyListScope.universalSearchResults(
         }
     }
 
-    val hasAnyStoragePermission = hasStoragePermission && (hasVisualMediaPermission || hasAudioMediaPermission)
-    if (!hasAnyStoragePermission && fileResults.isEmpty()) {
-        item(key = "hdr_files_permission") {
-            DrawerListSectionHeader(text = "Local Files")
-        }
-        item(key = "files_permission_btn") {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onRequestStoragePermission() }
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Folder,
-                        contentDescription = "Grant Storage Permission",
-                        tint = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = "Grant storage permission to search files",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                }
-            }
-        }
-    } else if (fileResults.isNotEmpty()) {
-        item(key = "hdr_files_results") {
-            DrawerListSectionHeader(text = "Local Files")
-        }
-        items(
-            count = fileResults.size,
-            key = { index -> "file_${fileResults[index].id}" }
-        ) { index ->
-            val file = fileResults[index]
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        try {
-                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(file.uri, file.mimeType ?: "*/*")
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                            }
-                            context.startActivity(intent)
-                            onCloseDrawer()
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Cannot open file", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (file.mimeType?.startsWith("image") == true ||
-                        file.mimeType?.startsWith("video") == true) {
-                        val isVideo = file.mimeType?.startsWith("video") == true
-                        val imageRequest = ImageRequest.Builder(LocalContext.current)
-                            .data(file.uri)
-                            .crossfade(true)
-                            .apply {
-                                if (isVideo) {
-                                    videoFrameMillis(1000)
-                                }
-                            }
-                            .build()
-                        val fallbackPainter = rememberVectorPainter(
-                            if (isVideo) Icons.Default.VideoFile else Icons.Default.InsertDriveFile
-                        )
-                        coil.compose.AsyncImage(
-                            model = imageRequest,
-                            contentDescription = file.displayName,
-                            placeholder = fallbackPainter,
-                            error = fallbackPainter,
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    } else {
-                        Icon(
-                            imageVector = when {
-                                file.mimeType?.startsWith("audio") == true -> Icons.Default.AudioFile
-                                file.mimeType?.contains("pdf") == true -> Icons.Default.PictureAsPdf
-                                else -> Icons.Default.InsertDriveFile
-                            },
-                            contentDescription = file.displayName,
-                            tint = MaterialTheme.colorScheme.tertiary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = file.displayName,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = formatFileSize(file.sizeBytes),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-    }
-
+    // 5. Call Logs Results
     if (callLogResults.isNotEmpty()) {
-        item(key = "hdr_call_logs_results") {
+        item(key = "hdr_call_logs_results", contentType = "header") {
             DrawerListSectionHeader(text = "Call Logs")
         }
         items(
             count = callLogResults.size,
-            key = { index -> "calllog_${callLogResults[index].id}" }
+            key = { index -> "calllog_${callLogResults[index].id}" },
+            contentType = { "calllog_result" }
         ) { index ->
             val log = callLogResults[index]
             val dispName = log.cachedName ?: log.number
@@ -445,13 +723,15 @@ fun LazyListScope.universalSearchResults(
         }
     }
 
+    // 6. Messages Results
     if (messageResults.isNotEmpty()) {
-        item(key = "hdr_message_results") {
+        item(key = "hdr_message_results", contentType = "header") {
             DrawerListSectionHeader(text = "Messages")
         }
         items(
             count = messageResults.size,
-            key = { index -> "msg_${messageResults[index].id}" }
+            key = { index -> "msg_${messageResults[index].id}" },
+            contentType = { "message_result" }
         ) { index ->
             val msg = messageResults[index]
             Surface(
@@ -495,13 +775,15 @@ fun LazyListScope.universalSearchResults(
         }
     }
 
+    // 7. Calendar Results
     if (calendarResults.isNotEmpty()) {
-        item(key = "hdr_calendar_results") {
+        item(key = "hdr_calendar_results", contentType = "header") {
             DrawerListSectionHeader(text = "Calendar Events")
         }
         items(
             count = calendarResults.size,
-            key = { index -> "cal_${calendarResults[index].id}" }
+            key = { index -> "cal_${calendarResults[index].id}" },
+            contentType = { "calendar_result" }
         ) { index ->
             val event = calendarResults[index]
             Surface(
@@ -545,11 +827,267 @@ fun LazyListScope.universalSearchResults(
     }
 }
 
-private fun String?.isNull_or_blank(): Boolean = this == null || this.isBlank()
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ManageIndexedFoldersBottomSheet(
+    folders: List<IndexedFolderEntity>,
+    isIndexing: Boolean,
+    onDismiss: () -> Unit,
+    onAddFolder: () -> Unit,
+    onRemoveFolder: (Long, String) -> Unit,
+    onReindexAll: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Search Folders",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(onClick = onReindexAll, enabled = !isIndexing && folders.isNotEmpty()) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Reindex all folders",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Documents inside these folders are indexed locally so you can search them instantly without background filesystem scans.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (isIndexing) {
+                Spacer(modifier = Modifier.height(16.dp))
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Indexing files...",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (folders.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No folders added yet",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                ) {
+                    items(folders, key = { it.id }) { folder ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = "Folder",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = folder.displayName,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = "${folder.documentCount} documents indexed",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onRemoveFolder(folder.id, folder.treeUri) }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.DeleteOutline,
+                                        contentDescription = "Remove folder",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = onAddFolder,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(imageVector = Icons.Default.Add, contentDescription = "Add Folder")
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Add Folder")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+fun MediaResultRow(
+    media: MediaSearchResult,
+    context: Context,
+    onCloseDrawer: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(media.uri, media.mimeType ?: "*/*")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    context.startActivity(intent)
+                    onCloseDrawer()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Cannot open media", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            when (media.mediaType) {
+                MediaType.IMAGE, MediaType.VIDEO -> {
+                    val isVideo = media.mediaType == MediaType.VIDEO
+                    val imageRequest = ImageRequest.Builder(LocalContext.current)
+                        .data(media.uri)
+                        .size(120, 120)
+                        .scale(Scale.FILL)
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .crossfade(true)
+                        .apply {
+                            if (isVideo) {
+                                videoFrameMillis(1000)
+                            }
+                        }
+                        .build()
+                    val fallbackPainter = rememberVectorPainter(
+                        if (isVideo) Icons.Default.VideoFile else Icons.Default.Image
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(6.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AsyncImage(
+                            model = imageRequest,
+                            contentDescription = media.displayName,
+                            placeholder = fallbackPainter,
+                            error = fallbackPainter,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        if (isVideo) {
+                            Icon(
+                                imageVector = Icons.Default.PlayCircleFilled,
+                                contentDescription = "Video",
+                                tint = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+                MediaType.AUDIO -> {
+                    Surface(
+                        modifier = Modifier.size(40.dp),
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.AudioFile,
+                                contentDescription = "Audio",
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = media.displayName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = formatFileSize(media.sizeBytes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private fun getDocumentIcon(mimeType: String, fileName: String): androidx.compose.ui.graphics.vector.ImageVector {
+    val lowerName = fileName.lowercase()
+    return when {
+        mimeType.contains("pdf") || lowerName.endsWith(".pdf") -> Icons.Default.PictureAsPdf
+        mimeType.contains("word") || lowerName.endsWith(".doc") || lowerName.endsWith(".docx") -> Icons.Default.Description
+        mimeType.contains("sheet") || mimeType.contains("excel") || lowerName.endsWith(".xls") || lowerName.endsWith(".xlsx") || lowerName.endsWith(".csv") -> Icons.Default.TableChart
+        mimeType.contains("presentation") || mimeType.contains("powerpoint") || lowerName.endsWith(".ppt") || lowerName.endsWith(".pptx") -> Icons.Default.Slideshow
+        mimeType.contains("zip") || mimeType.contains("compressed") || mimeType.contains("tar") || lowerName.endsWith(".zip") || lowerName.endsWith(".rar") || lowerName.endsWith(".7z") -> Icons.Default.FolderZip
+        mimeType.startsWith("text") || lowerName.endsWith(".txt") || lowerName.endsWith(".md") || lowerName.endsWith(".json") || lowerName.endsWith(".xml") -> Icons.Default.Article
+        else -> Icons.Default.InsertDriveFile
+    }
+}
 
 private fun formatFileSize(bytes: Long): String {
     if (bytes <= 0) return "0 B"
     val units = arrayOf("B", "KB", "MB", "GB", "TB")
-    val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt()
+    val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt().coerceIn(0, units.size - 1)
     return String.format("%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
 }

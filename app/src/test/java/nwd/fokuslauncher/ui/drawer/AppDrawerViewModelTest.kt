@@ -23,6 +23,7 @@ import nwd.fokuslauncher.data.model.favoriteAppStableKey
 import nwd.fokuslauncher.data.model.appProfileKey
 import nwd.fokuslauncher.data.repository.AppRepository
 import nwd.fokuslauncher.data.repository.RemovedApp
+import nwd.fokuslauncher.data.search.DocumentIndexManager
 import nwd.fokuslauncher.notification.NotificationIndicatorRepository
 import nwd.fokuslauncher.utils.PrivateSpaceManager
 import io.mockk.clearMocks
@@ -58,6 +59,7 @@ class AppDrawerViewModelTest {
     private lateinit var privateSpaceManager: PrivateSpaceManager
     private lateinit var preferencesManager: PreferencesManager
     private lateinit var notificationIndicatorRepository: NotificationIndicatorRepository
+    private lateinit var documentIndexManager: DocumentIndexManager
     private lateinit var viewModel: AppDrawerViewModel
     private val testDispatcher = UnconfinedTestDispatcher()
 
@@ -155,6 +157,11 @@ class AppDrawerViewModelTest {
         every { privateSpaceManager.isPrivateSpaceUnlocked() } returns false
         every { privateSpaceManager.launchApp(any(), any()) } returns true
         every { privateSpaceManager.profileStateChanged } returns privateProfileChanges
+        documentIndexManager = mockk(relaxed = true)
+        every { documentIndexManager.indexedFoldersFlow } returns MutableStateFlow(emptyList())
+        every { documentIndexManager.totalDocumentCountFlow } returns MutableStateFlow(0)
+        every { documentIndexManager.isIndexing } returns MutableStateFlow(false)
+        coEvery { documentIndexManager.searchDocuments(any()) } returns emptyList()
         viewModel =
                 AppDrawerViewModel(
                         context,
@@ -162,6 +169,7 @@ class AppDrawerViewModelTest {
                         privateSpaceManager,
                         preferencesManager,
                         notificationIndicatorRepository,
+                        documentIndexManager,
                         Dispatchers.Unconfined
                 )
         awaitState("apps to load") { it.allApps.isNotEmpty() }
@@ -1249,4 +1257,91 @@ class AppDrawerViewModelTest {
         assertTrue(state.privateSpaceApps.isEmpty())
         assertFalse(state.showMenu)
     }
+
+    @Test
+    fun `drawer stable ordering with ALPHABETICAL mode`() {
+        drawerAppSortModeFlow.value = DrawerAppSortMode.ALPHABETICAL
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val labels = flatFiltered(viewModel.uiState.value).map { it.label }
+        val sortedLabels = labels.sortedWith(String.CASE_INSENSITIVE_ORDER)
+        assertEquals(sortedLabels, labels)
+    }
+
+    @Test
+    fun `drawer stable ordering with MOST_USED mode`() {
+        drawerAppOpenCountsFlow.value = mapOf(
+            "com.lu4p.twitter#0" to 100,
+            "com.lu4p.calculator#0" to 50,
+            "com.lu4p.atom#0" to 10
+        )
+        drawerAppSortModeFlow.value = DrawerAppSortMode.MOST_USED
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val labels = flatFiltered(viewModel.uiState.value).map { it.label }
+        assertTrue(labels.indexOf("Twitter") < labels.indexOf("Calculator"))
+        assertTrue(labels.indexOf("Calculator") < labels.indexOf("Atom"))
+    }
+
+    @Test
+    fun `drawer stable ordering with CUSTOM mode and reorder mode`() {
+        drawerSidebarCategoriesFlow.value = true
+        drawerAppSortModeFlow.value = DrawerAppSortMode.CUSTOM
+        drawerCustomAppOrderFlow.value = mapOf(
+            "0" to listOf(
+                "com.lu4p.twitter#0",
+                "com.lu4p.bank#0",
+                "com.lu4p.camera#0"
+            )
+        )
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals(DrawerAppSortMode.CUSTOM, state.drawerAppSortMode)
+
+        viewModel.toggleDrawerReorderSession()
+        assertTrue(viewModel.uiState.value.drawerReorderSessionActive)
+
+        viewModel.reorderDrawerProfileSectionApps("0", 0, 1)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.toggleDrawerReorderSession()
+        assertFalse(viewModel.uiState.value.drawerReorderSessionActive)
+    }
+
+    @Test
+    fun `drawer profile sections separates Personal and Work apps`() {
+        val workUser = mockk<UserHandle>()
+        every { workUser.hashCode() } returns 42
+        installedApps = listOf(
+            AppInfo("com.lu4p.chrome", "Chrome", null),
+            AppInfo("com.work.slack", "Slack", null, userHandle = workUser)
+        )
+        installedAppsVersion.value += 1L
+        awaitState("multi-profile sections loaded") { state ->
+            state.filteredProfileSections.size == 2
+        }
+
+        val sections = viewModel.uiState.value.filteredProfileSections
+        assertEquals(2, sections.size)
+        assertEquals("Personal", sections[0].title)
+        assertTrue(sections[0].apps.any { it.label == "Chrome" })
+        assertEquals("Work profile", sections[1].title)
+        assertTrue(sections[1].apps.any { it.label == "Slack" })
+    }
+
+    @Test
+    fun `stale search request cannot overwrite subsequent search queries`() {
+        viewModel.onSearchQueryChanged("calc")
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("calc", viewModel.uiState.value.searchQuery)
+        assertTrue(flatFiltered(viewModel.uiState.value).any { it.label == "Calculator" })
+
+        viewModel.onSearchQueryChanged("twit")
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals("twit", viewModel.uiState.value.searchQuery)
+        assertTrue(flatFiltered(viewModel.uiState.value).any { it.label == "Twitter" })
+        assertFalse(flatFiltered(viewModel.uiState.value).any { it.label == "Calculator" })
+    }
 }
+

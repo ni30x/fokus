@@ -12,6 +12,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import nwd.fokuslauncher.data.database.AppDatabase
 import nwd.fokuslauncher.data.database.dao.AppDao
+import nwd.fokuslauncher.data.database.dao.IndexedDocumentDao
 import nwd.fokuslauncher.data.local.PreferencesManager
 import nwd.fokuslauncher.data.model.appProfileKey
 import nwd.fokuslauncher.data.repository.WeatherRepository
@@ -80,6 +81,27 @@ object AppModule {
             "DROP TABLE `app_categories`",
             "ALTER TABLE `app_categories_new` RENAME TO `app_categories`",
         )
+
+    val migration6To7 =
+        object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `indexed_folders` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `treeUri` TEXT NOT NULL, `displayName` TEXT NOT NULL, `addedAt` INTEGER NOT NULL, `lastIndexedAt` INTEGER NOT NULL, `documentCount` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `indexed_documents` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `folderId` INTEGER NOT NULL, `treeUri` TEXT NOT NULL, `documentId` TEXT NOT NULL, `documentUri` TEXT NOT NULL, `displayName` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `sizeBytes` INTEGER NOT NULL, `lastModified` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_indexed_documents_folderId` ON `indexed_documents` (`folderId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_indexed_documents_displayName` ON `indexed_documents` (`displayName`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_indexed_documents_documentUri` ON `indexed_documents` (`documentUri`)"
+                )
+            }
+        }
 
     val migration5To6 =
         object : Migration(5, 6) {
@@ -202,7 +224,7 @@ object AppModule {
             context,
             AppDatabase::class.java,
             "fokus_launcher_db"
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, migration3To4(context), migration4To5, migration5To6)
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, migration3To4(context), migration4To5, migration5To6, migration6To7)
          .build()
         AppDatabase.instance = db
         return db
@@ -211,6 +233,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideAppDao(database: AppDatabase): AppDao = database.appDao()
+
+    @Provides
+    @Singleton
+    fun provideIndexedDocumentDao(database: AppDatabase): IndexedDocumentDao = database.indexedDocumentDao()
 
     @Provides
     @Singleton

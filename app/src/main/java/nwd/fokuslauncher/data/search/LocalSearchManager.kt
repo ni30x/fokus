@@ -12,10 +12,74 @@ import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Telephony
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+
+enum class ProviderType {
+    MEDIA_IMAGES,
+    MEDIA_VIDEO,
+    MEDIA_AUDIO,
+    DOCUMENTS,
+    CONTACTS,
+    CALL_LOGS,
+    SMS_MESSAGES,
+    CALENDAR
+}
+
+enum class QueryStage {
+    PERMISSION_CHECK,
+    RESOLVER_QUERY,
+    CURSOR_ITERATION,
+    BATCH_FETCH,
+    MAP_RESULTS
+}
+
+sealed class ProviderQueryResult<out T> {
+    data class Success<T>(val data: List<T>) : ProviderQueryResult<T>()
+    object PermissionRequired : ProviderQueryResult<Nothing>()
+    object NoResults : ProviderQueryResult<Nothing>()
+    data class ProviderFailure(val exceptionType: String, val message: String?) : ProviderQueryResult<Nothing>()
+
+    fun getOrEmpty(): List<T> = when (this) {
+        is Success -> data
+        else -> emptyList()
+    }
+}
+
+private fun logProviderDebug(
+    providerType: ProviderType,
+    uri: Uri?,
+    stage: QueryStage,
+    throwable: Throwable?
+) {
+    if (android.util.Log.isLoggable("LocalSearch", android.util.Log.DEBUG)) {
+        val uriStr = uri?.let { "${it.scheme}://${it.authority}${it.path ?: ""}" } ?: "none"
+        val exType = throwable?.javaClass?.simpleName ?: "None"
+        val exMsg = throwable?.message ?: "None"
+        android.util.Log.d(
+            "LocalSearch",
+            "Provider: $providerType | Stage: $stage | URI: $uriStr | Exception: $exType($exMsg)"
+        )
+    }
+}
+
+enum class MediaType {
+    IMAGE,
+    VIDEO,
+    AUDIO
+}
+
+data class MediaSearchResult(
+    val id: Long,
+    val displayName: String,
+    val uri: Uri,
+    val mimeType: String?,
+    val sizeBytes: Long,
+    val mediaType: MediaType
+)
 
 data class FileSearchResult(
     val id: Long,
@@ -58,7 +122,20 @@ data class CalendarSearchResult(
 
 object LocalSearchManager {
 
-    private fun hasImagesPermission(context: Context): Boolean {
+    fun hasVisualMediaPermission(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun hasImagesPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
@@ -69,7 +146,7 @@ object LocalSearchManager {
         }
     }
 
-    private fun hasVideoPermission(context: Context): Boolean {
+    fun hasVideoPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
@@ -80,7 +157,7 @@ object LocalSearchManager {
         }
     }
 
-    private fun hasAudioPermission(context: Context): Boolean {
+    fun hasAudioPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
         } else {
@@ -88,31 +165,29 @@ object LocalSearchManager {
         }
     }
 
-    private fun queryMediaUri(
+    private fun queryMediaCollection(
         context: Context,
-        uri: Uri,
+        collectionUri: Uri,
+        mediaType: MediaType,
         query: String,
         limit: Int
-    ): List<FileSearchResult> {
+    ): ProviderQueryResult<MediaSearchResult> {
         val trimmed = query.trim()
-        if (trimmed.length < 2) return emptyList()
+        if (trimmed.length < 2) return ProviderQueryResult.NoResults
 
-        val isPermitted = when (uri) {
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI -> hasImagesPermission(context)
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI -> hasVideoPermission(context)
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI -> hasAudioPermission(context)
-            else -> hasImagesPermission(context) || hasVideoPermission(context) || hasAudioPermission(context)
+        val providerType = when (mediaType) {
+            MediaType.IMAGE -> ProviderType.MEDIA_IMAGES
+            MediaType.VIDEO -> ProviderType.MEDIA_VIDEO
+            MediaType.AUDIO -> ProviderType.MEDIA_AUDIO
         }
-        if (!isPermitted) return emptyList()
 
-        val results = mutableListOf<FileSearchResult>()
+        val results = mutableListOf<MediaSearchResult>()
         val resolver: ContentResolver = context.contentResolver
 
         try {
             val projection = arrayOf(
                 MediaStore.MediaColumns._ID,
                 MediaStore.MediaColumns.DISPLAY_NAME,
-                MediaStore.MediaColumns.DATA,
                 MediaStore.MediaColumns.SIZE,
                 MediaStore.MediaColumns.MIME_TYPE,
                 MediaStore.MediaColumns.TITLE
@@ -121,93 +196,158 @@ object LocalSearchManager {
             val selectionArgs = arrayOf("%$trimmed%", "%$trimmed%")
             val sortOrder = "${MediaStore.MediaColumns.DATE_MODIFIED} DESC LIMIT $limit"
 
-            resolver.query(
-                uri,
-                projection,
-                selection,
-                selectionArgs,
-                sortOrder
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-                val nameCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
-                val pathCol = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
-                val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
-                val mimeCol = cursor.getColumnIndex(MediaStore.MediaColumns.MIME_TYPE)
-                val titleCol = cursor.getColumnIndex(MediaStore.MediaColumns.TITLE)
+            val cursor = try {
+                resolver.query(
+                    collectionUri,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
+            } catch (e: SecurityException) {
+                logProviderDebug(providerType, collectionUri, QueryStage.PERMISSION_CHECK, e)
+                return ProviderQueryResult.PermissionRequired
+            } catch (e: Exception) {
+                logProviderDebug(providerType, collectionUri, QueryStage.RESOLVER_QUERY, e)
+                return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+            }
 
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idCol)
-                    val name = cursor.getString(nameCol) ?: (if (titleCol >= 0) cursor.getString(titleCol) else "File") ?: "File"
-                    val path = if (pathCol >= 0) cursor.getString(pathCol) ?: "" else ""
-                    val size = cursor.getLong(sizeCol)
-                    val mime = if (mimeCol >= 0) cursor.getString(mimeCol) else null
-                    val fileUri = Uri.withAppendedPath(uri, id.toString())
+            cursor?.use { c ->
+                try {
+                    val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                    val nameCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                    val sizeCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                    val mimeCol = c.getColumnIndex(MediaStore.MediaColumns.MIME_TYPE)
+                    val titleCol = c.getColumnIndex(MediaStore.MediaColumns.TITLE)
 
-                    results.add(FileSearchResult(id, name, path, size, fileUri, mime))
+                    while (c.moveToNext()) {
+                        val id = c.getLong(idCol)
+                        val name = c.getString(nameCol) ?: (if (titleCol >= 0) c.getString(titleCol) else "Media") ?: "Media"
+                        val size = c.getLong(sizeCol)
+                        val mime = if (mimeCol >= 0) c.getString(mimeCol) else null
+                        val fileUri = Uri.withAppendedPath(collectionUri, id.toString())
+
+                        results.add(
+                            MediaSearchResult(
+                                id = id,
+                                displayName = name,
+                                uri = fileUri,
+                                mimeType = mime,
+                                sizeBytes = size,
+                                mediaType = mediaType
+                            )
+                        )
+                    }
+                } catch (e: Exception) {
+                    logProviderDebug(providerType, collectionUri, QueryStage.CURSOR_ITERATION, e)
+                    return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
                 }
             }
+        } catch (e: SecurityException) {
+            logProviderDebug(providerType, collectionUri, QueryStage.PERMISSION_CHECK, e)
+            return ProviderQueryResult.PermissionRequired
         } catch (e: Exception) {
-            e.printStackTrace()
-            android.util.Log.e("LocalSearchManager", "Error searching uri $uri", e)
+            logProviderDebug(providerType, collectionUri, QueryStage.MAP_RESULTS, e)
+            return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
         }
 
-        return results
+        return if (results.isEmpty()) ProviderQueryResult.NoResults else ProviderQueryResult.Success(results)
     }
 
-    suspend fun searchFiles(context: Context, query: String, limit: Int = 10): List<FileSearchResult> = coroutineScope {
+    suspend fun searchMediaResult(context: Context, query: String, limit: Int = 10): ProviderQueryResult<MediaSearchResult> = coroutineScope {
         val trimmed = query.trim()
-        if (trimmed.length < 2) return@coroutineScope emptyList()
+        if (trimmed.length < 2) return@coroutineScope ProviderQueryResult.NoResults
 
         val canReadImages = hasImagesPermission(context)
         val canReadVideo = hasVideoPermission(context)
         val canReadAudio = hasAudioPermission(context)
 
         if (!canReadImages && !canReadVideo && !canReadAudio) {
-            return@coroutineScope emptyList()
+            logProviderDebug(ProviderType.MEDIA_IMAGES, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, QueryStage.PERMISSION_CHECK, null)
+            return@coroutineScope ProviderQueryResult.PermissionRequired
         }
 
-        val uris = mutableListOf<Uri>()
+        val queries = mutableListOf<Pair<Uri, MediaType>>()
         if (canReadImages) {
-            uris.add(MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+            queries.add(MediaStore.Images.Media.EXTERNAL_CONTENT_URI to MediaType.IMAGE)
         }
         if (canReadVideo) {
-            uris.add(MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+            queries.add(MediaStore.Video.Media.EXTERNAL_CONTENT_URI to MediaType.VIDEO)
         }
         if (canReadAudio) {
-            uris.add(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+            queries.add(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI to MediaType.AUDIO)
         }
-        uris.add(MediaStore.Files.getContentUri("external"))
-        
-        val queryJobs = uris.map { uri ->
+
+        val queryJobs = queries.map { (uri, type) ->
             async {
-                queryMediaUri(context, uri, query, limit)
+                queryMediaCollection(context, uri, type, query, limit)
             }
         }
-        
+
         val allResults = queryJobs.awaitAll()
-        val results = mutableListOf<FileSearchResult>()
-        for (r in allResults) {
-            for (item in r) {
-                if (results.size >= limit) break
-                if (results.none { it.path == item.path }) {
-                    results.add(item)
+        val combined = mutableListOf<MediaSearchResult>()
+        var hadFailure: ProviderQueryResult.ProviderFailure? = null
+
+        for (res in allResults) {
+            when (res) {
+                is ProviderQueryResult.Success -> {
+                    for (item in res.data) {
+                        if (combined.size >= limit) break
+                        if (combined.none { it.id == item.id && it.mediaType == item.mediaType }) {
+                            combined.add(item)
+                        }
+                    }
                 }
+                is ProviderQueryResult.ProviderFailure -> hadFailure = res
+                else -> Unit
             }
-            if (results.size >= limit) break
+            if (combined.size >= limit) break
         }
-        
-        results.take(limit)
+
+        when {
+            combined.isNotEmpty() -> ProviderQueryResult.Success(combined.take(limit))
+            hadFailure != null -> hadFailure
+            else -> ProviderQueryResult.NoResults
+        }
     }
 
-    fun searchContacts(context: Context, query: String, limit: Int = 8): List<ContactSearchResult> {
+    suspend fun searchMedia(context: Context, query: String, limit: Int = 10): List<MediaSearchResult> {
+        return searchMediaResult(context, query, limit).getOrEmpty()
+    }
+
+    suspend fun searchFiles(context: Context, query: String, limit: Int = 10): List<FileSearchResult> {
+        val media = searchMedia(context, query, limit)
+        return media.map {
+            FileSearchResult(
+                id = it.id,
+                displayName = it.displayName,
+                path = it.uri.toString(),
+                sizeBytes = it.sizeBytes,
+                uri = it.uri,
+                mimeType = it.mimeType
+            )
+        }
+    }
+
+    fun searchContactsResult(context: Context, query: String, limit: Int = 8): ProviderQueryResult<ContactSearchResult> {
         val trimmed = query.trim()
-        if (trimmed.length < 2) return emptyList()
+        if (trimmed.length < 2) return ProviderQueryResult.NoResults
 
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-            return emptyList()
+            logProviderDebug(ProviderType.CONTACTS, ContactsContract.Contacts.CONTENT_URI, QueryStage.PERMISSION_CHECK, null)
+            return ProviderQueryResult.PermissionRequired
         }
 
-        val results = mutableListOf<ContactSearchResult>()
+        data class TempContact(
+            val id: String,
+            val name: String,
+            val hasPhone: Boolean,
+            val photoUri: Uri?
+        )
+
+        val tempContacts = mutableListOf<TempContact>()
+        val seenContactIds = mutableSetOf<String>()
+
         try {
             val projection = arrayOf(
                 ContactsContract.Contacts._ID,
@@ -219,63 +359,151 @@ object LocalSearchManager {
             val selectionArgs = arrayOf("%$trimmed%")
             val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} ASC LIMIT $limit"
 
-            context.contentResolver.query(
-                ContactsContract.Contacts.CONTENT_URI,
-                projection,
-                selection,
-                selectionArgs,
-                sortOrder
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(ContactsContract.Contacts._ID)
-                val nameCol = cursor.getColumnIndexOrThrow(ContactsContract.Contacts.DISPLAY_NAME_PRIMARY)
-                val hasPhoneCol = cursor.getColumnIndexOrThrow(ContactsContract.Contacts.HAS_PHONE_NUMBER)
-                val photoCol = cursor.getColumnIndex(ContactsContract.Contacts.PHOTO_THUMBNAIL_URI)
+            val cursor = try {
+                context.contentResolver.query(
+                    ContactsContract.Contacts.CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
+            } catch (e: SecurityException) {
+                logProviderDebug(ProviderType.CONTACTS, ContactsContract.Contacts.CONTENT_URI, QueryStage.PERMISSION_CHECK, e)
+                return ProviderQueryResult.PermissionRequired
+            } catch (e: Exception) {
+                logProviderDebug(ProviderType.CONTACTS, ContactsContract.Contacts.CONTENT_URI, QueryStage.RESOLVER_QUERY, e)
+                return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+            }
 
-                while (cursor.moveToNext()) {
-                    val id = cursor.getString(idCol)
-                    val name = cursor.getString(nameCol) ?: "Contact"
-                    val hasPhone = cursor.getInt(hasPhoneCol) > 0
-                    val photoStr = if (photoCol >= 0) cursor.getString(photoCol) else null
-                    val photoUri = photoStr?.let { Uri.parse(it) }
+            cursor?.use { c ->
+                try {
+                    val idCol = c.getColumnIndexOrThrow(ContactsContract.Contacts._ID)
+                    val nameCol = c.getColumnIndexOrThrow(ContactsContract.Contacts.DISPLAY_NAME_PRIMARY)
+                    val hasPhoneCol = c.getColumnIndexOrThrow(ContactsContract.Contacts.HAS_PHONE_NUMBER)
+                    val photoCol = c.getColumnIndex(ContactsContract.Contacts.PHOTO_THUMBNAIL_URI)
 
-                    var phone: String? = null
-                    if (hasPhone) {
-                        phone = getPrimaryPhone(context, id)
+                    while (c.moveToNext()) {
+                        val id = c.getString(idCol)
+                        if (id != null && seenContactIds.add(id)) {
+                            val name = c.getString(nameCol) ?: "Contact"
+                            val hasPhone = c.getInt(hasPhoneCol) > 0
+                            val photoStr = if (photoCol >= 0) c.getString(photoCol) else null
+                            val photoUri = photoStr?.let { Uri.parse(it) }
+                            tempContacts.add(TempContact(id, name, hasPhone, photoUri))
+                        }
                     }
-
-                    results.add(ContactSearchResult(id, name, phone, photoUri))
+                } catch (e: Exception) {
+                    logProviderDebug(ProviderType.CONTACTS, ContactsContract.Contacts.CONTENT_URI, QueryStage.CURSOR_ITERATION, e)
+                    return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
                 }
             }
+
+            // Also search by phone number if query contains digits and limit not yet reached
+            if (trimmed.any { it.isDigit() } && tempContacts.size < limit) {
+                val phoneRemainingLimit = limit - tempContacts.size
+                val phoneProjection = arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY,
+                    ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI
+                )
+                val phoneSelection = "${ContactsContract.CommonDataKinds.Phone.NUMBER} LIKE ?"
+                val phoneArgs = arrayOf("%$trimmed%")
+                val phoneOrder = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY} ASC LIMIT $phoneRemainingLimit"
+
+                try {
+                    context.contentResolver.query(
+                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                        phoneProjection,
+                        phoneSelection,
+                        phoneArgs,
+                        phoneOrder
+                    )?.use { phoneCursor ->
+                        val idCol = phoneCursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+                        val nameCol = phoneCursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY)
+                        val photoCol = phoneCursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI)
+
+                        while (phoneCursor.moveToNext()) {
+                            val id = phoneCursor.getString(idCol)
+                            if (id != null && seenContactIds.add(id)) {
+                                val name = phoneCursor.getString(nameCol) ?: "Contact"
+                                val photoStr = if (photoCol >= 0) phoneCursor.getString(photoCol) else null
+                                val photoUri = photoStr?.let { Uri.parse(it) }
+                                tempContacts.add(TempContact(id, name, true, photoUri))
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    logProviderDebug(ProviderType.CONTACTS, ContactsContract.CommonDataKinds.Phone.CONTENT_URI, QueryStage.RESOLVER_QUERY, e)
+                }
+            }
+
+            // Batch fetch phone numbers in a single query across all matched contacts
+            val contactIdsWithPhone = tempContacts.filter { it.hasPhone }.map { it.id }
+            val phoneMap = mutableMapOf<String, String>()
+
+            if (contactIdsWithPhone.isNotEmpty()) {
+                val placeholders = contactIdsWithPhone.joinToString(",") { "?" }
+                val phoneBatchProjection = arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.IS_PRIMARY
+                )
+                val phoneBatchSelection = "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} IN ($placeholders)"
+                val phoneBatchArgs = contactIdsWithPhone.toTypedArray()
+                val phoneBatchOrder = "${ContactsContract.CommonDataKinds.Phone.IS_PRIMARY} DESC"
+
+                try {
+                    context.contentResolver.query(
+                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                        phoneBatchProjection,
+                        phoneBatchSelection,
+                        phoneBatchArgs,
+                        phoneBatchOrder
+                    )?.use { pCursor ->
+                        val cIdCol = pCursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+                        val numCol = pCursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                        while (pCursor.moveToNext()) {
+                            val cId = pCursor.getString(cIdCol)
+                            val num = pCursor.getString(numCol)
+                            if (cId != null && num != null && !phoneMap.containsKey(cId)) {
+                                phoneMap[cId] = num
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    logProviderDebug(ProviderType.CONTACTS, ContactsContract.CommonDataKinds.Phone.CONTENT_URI, QueryStage.BATCH_FETCH, e)
+                }
+            }
+
+            val mapped = tempContacts.map { contact ->
+                ContactSearchResult(
+                    id = contact.id,
+                    displayName = contact.name,
+                    phoneNumber = phoneMap[contact.id],
+                    photoUri = contact.photoUri
+                )
+            }
+            return if (mapped.isEmpty()) ProviderQueryResult.NoResults else ProviderQueryResult.Success(mapped)
+        } catch (e: SecurityException) {
+            logProviderDebug(ProviderType.CONTACTS, ContactsContract.Contacts.CONTENT_URI, QueryStage.PERMISSION_CHECK, e)
+            return ProviderQueryResult.PermissionRequired
         } catch (e: Exception) {
-            // Permission or Contacts error handled gracefully
+            logProviderDebug(ProviderType.CONTACTS, ContactsContract.Contacts.CONTENT_URI, QueryStage.MAP_RESULTS, e)
+            return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
         }
-
-        return results
     }
 
-    private fun getPrimaryPhone(context: Context, contactId: String): String? {
-        try {
-            context.contentResolver.query(
-                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
-                "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
-                arrayOf(contactId),
-                null
-            )?.use { pCursor ->
-                if (pCursor.moveToFirst()) {
-                    return pCursor.getString(0)
-                }
-            }
-        } catch (e: Exception) { }
-        return null
+    fun searchContacts(context: Context, query: String, limit: Int = 8): List<ContactSearchResult> {
+        return searchContactsResult(context, query, limit).getOrEmpty()
     }
 
-    fun searchCallLogs(context: Context, query: String, limit: Int = 5): List<CallLogSearchResult> {
+    fun searchCallLogsResult(context: Context, query: String, limit: Int = 5): ProviderQueryResult<CallLogSearchResult> {
         val trimmed = query.trim()
-        if (trimmed.length < 2) return emptyList()
+        if (trimmed.length < 2) return ProviderQueryResult.NoResults
 
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
-            return emptyList()
+            logProviderDebug(ProviderType.CALL_LOGS, CallLog.Calls.CONTENT_URI, QueryStage.PERMISSION_CHECK, null)
+            return ProviderQueryResult.PermissionRequired
         }
 
         val results = mutableListOf<CallLogSearchResult>()
@@ -291,40 +519,66 @@ object LocalSearchManager {
             val selectionArgs = arrayOf("%$trimmed%", "%$trimmed%")
             val sortOrder = "${CallLog.Calls.DATE} DESC LIMIT $limit"
 
-            context.contentResolver.query(
-                CallLog.Calls.CONTENT_URI,
-                projection,
-                selection,
-                selectionArgs,
-                sortOrder
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(CallLog.Calls._ID)
-                val numberCol = cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER)
-                val nameCol = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)
-                val dateCol = cursor.getColumnIndexOrThrow(CallLog.Calls.DATE)
-                val typeCol = cursor.getColumnIndexOrThrow(CallLog.Calls.TYPE)
+            val cursor = try {
+                context.contentResolver.query(
+                    CallLog.Calls.CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
+            } catch (e: SecurityException) {
+                logProviderDebug(ProviderType.CALL_LOGS, CallLog.Calls.CONTENT_URI, QueryStage.PERMISSION_CHECK, e)
+                return ProviderQueryResult.PermissionRequired
+            } catch (e: Exception) {
+                logProviderDebug(ProviderType.CALL_LOGS, CallLog.Calls.CONTENT_URI, QueryStage.RESOLVER_QUERY, e)
+                return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+            }
 
-                while (cursor.moveToNext()) {
-                    val id = cursor.getString(idCol)
-                    val number = cursor.getString(numberCol) ?: ""
-                    val name = if (nameCol >= 0) cursor.getString(nameCol) else null
-                    val date = cursor.getLong(dateCol)
-                    val type = cursor.getInt(typeCol)
+            cursor?.use { c ->
+                try {
+                    val idCol = c.getColumnIndexOrThrow(CallLog.Calls._ID)
+                    val numberCol = c.getColumnIndexOrThrow(CallLog.Calls.NUMBER)
+                    val nameCol = c.getColumnIndex(CallLog.Calls.CACHED_NAME)
+                    val dateCol = c.getColumnIndexOrThrow(CallLog.Calls.DATE)
+                    val typeCol = c.getColumnIndexOrThrow(CallLog.Calls.TYPE)
 
-                    results.add(CallLogSearchResult(id, number, name, date, type))
+                    while (c.moveToNext()) {
+                        val id = c.getString(idCol)
+                        val number = c.getString(numberCol) ?: ""
+                        val name = if (nameCol >= 0) c.getString(nameCol) else null
+                        val date = c.getLong(dateCol)
+                        val type = c.getInt(typeCol)
+
+                        results.add(CallLogSearchResult(id, number, name, date, type))
+                    }
+                } catch (e: Exception) {
+                    logProviderDebug(ProviderType.CALL_LOGS, CallLog.Calls.CONTENT_URI, QueryStage.CURSOR_ITERATION, e)
+                    return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
                 }
             }
-        } catch (e: Exception) { }
+        } catch (e: SecurityException) {
+            logProviderDebug(ProviderType.CALL_LOGS, CallLog.Calls.CONTENT_URI, QueryStage.PERMISSION_CHECK, e)
+            return ProviderQueryResult.PermissionRequired
+        } catch (e: Exception) {
+            logProviderDebug(ProviderType.CALL_LOGS, CallLog.Calls.CONTENT_URI, QueryStage.MAP_RESULTS, e)
+            return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+        }
 
-        return results
+        return if (results.isEmpty()) ProviderQueryResult.NoResults else ProviderQueryResult.Success(results)
     }
 
-    fun searchMessages(context: Context, query: String, limit: Int = 5): List<MessageSearchResult> {
+    fun searchCallLogs(context: Context, query: String, limit: Int = 5): List<CallLogSearchResult> {
+        return searchCallLogsResult(context, query, limit).getOrEmpty()
+    }
+
+    fun searchMessagesResult(context: Context, query: String, limit: Int = 5): ProviderQueryResult<MessageSearchResult> {
         val trimmed = query.trim()
-        if (trimmed.length < 2) return emptyList()
+        if (trimmed.length < 2) return ProviderQueryResult.NoResults
 
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-            return emptyList()
+            logProviderDebug(ProviderType.SMS_MESSAGES, Telephony.Sms.CONTENT_URI, QueryStage.PERMISSION_CHECK, null)
+            return ProviderQueryResult.PermissionRequired
         }
 
         val results = mutableListOf<MessageSearchResult>()
@@ -339,38 +593,64 @@ object LocalSearchManager {
             val selectionArgs = arrayOf("%$trimmed%", "%$trimmed%")
             val sortOrder = "${Telephony.Sms.DATE} DESC LIMIT $limit"
 
-            context.contentResolver.query(
-                Telephony.Sms.CONTENT_URI,
-                projection,
-                selection,
-                selectionArgs,
-                sortOrder
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(Telephony.Sms._ID)
-                val addressCol = cursor.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
-                val bodyCol = cursor.getColumnIndexOrThrow(Telephony.Sms.BODY)
-                val dateCol = cursor.getColumnIndexOrThrow(Telephony.Sms.DATE)
+            val cursor = try {
+                context.contentResolver.query(
+                    Telephony.Sms.CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
+            } catch (e: SecurityException) {
+                logProviderDebug(ProviderType.SMS_MESSAGES, Telephony.Sms.CONTENT_URI, QueryStage.PERMISSION_CHECK, e)
+                return ProviderQueryResult.PermissionRequired
+            } catch (e: Exception) {
+                logProviderDebug(ProviderType.SMS_MESSAGES, Telephony.Sms.CONTENT_URI, QueryStage.RESOLVER_QUERY, e)
+                return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+            }
 
-                while (cursor.moveToNext()) {
-                    val id = cursor.getString(idCol)
-                    val address = cursor.getString(addressCol) ?: ""
-                    val body = cursor.getString(bodyCol) ?: ""
-                    val date = cursor.getLong(dateCol)
+            cursor?.use { c ->
+                try {
+                    val idCol = c.getColumnIndexOrThrow(Telephony.Sms._ID)
+                    val addressCol = c.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
+                    val bodyCol = c.getColumnIndexOrThrow(Telephony.Sms.BODY)
+                    val dateCol = c.getColumnIndexOrThrow(Telephony.Sms.DATE)
 
-                    results.add(MessageSearchResult(id, address, body, date))
+                    while (c.moveToNext()) {
+                        val id = c.getString(idCol)
+                        val address = c.getString(addressCol) ?: ""
+                        val body = c.getString(bodyCol) ?: ""
+                        val date = c.getLong(dateCol)
+
+                        results.add(MessageSearchResult(id, address, body, date))
+                    }
+                } catch (e: Exception) {
+                    logProviderDebug(ProviderType.SMS_MESSAGES, Telephony.Sms.CONTENT_URI, QueryStage.CURSOR_ITERATION, e)
+                    return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
                 }
             }
-        } catch (e: Exception) { }
+        } catch (e: SecurityException) {
+            logProviderDebug(ProviderType.SMS_MESSAGES, Telephony.Sms.CONTENT_URI, QueryStage.PERMISSION_CHECK, e)
+            return ProviderQueryResult.PermissionRequired
+        } catch (e: Exception) {
+            logProviderDebug(ProviderType.SMS_MESSAGES, Telephony.Sms.CONTENT_URI, QueryStage.MAP_RESULTS, e)
+            return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+        }
 
-        return results
+        return if (results.isEmpty()) ProviderQueryResult.NoResults else ProviderQueryResult.Success(results)
     }
 
-    fun searchCalendar(context: Context, query: String, limit: Int = 5): List<CalendarSearchResult> {
+    fun searchMessages(context: Context, query: String, limit: Int = 5): List<MessageSearchResult> {
+        return searchMessagesResult(context, query, limit).getOrEmpty()
+    }
+
+    fun searchCalendarResult(context: Context, query: String, limit: Int = 5): ProviderQueryResult<CalendarSearchResult> {
         val trimmed = query.trim()
-        if (trimmed.length < 2) return emptyList()
+        if (trimmed.length < 2) return ProviderQueryResult.NoResults
 
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) {
-            return emptyList()
+            logProviderDebug(ProviderType.CALENDAR, CalendarContract.Events.CONTENT_URI, QueryStage.PERMISSION_CHECK, null)
+            return ProviderQueryResult.PermissionRequired
         }
 
         val results = mutableListOf<CalendarSearchResult>()
@@ -386,31 +666,56 @@ object LocalSearchManager {
             val selectionArgs = arrayOf("%$trimmed%", "%$trimmed%")
             val sortOrder = "${CalendarContract.Events.DTSTART} DESC LIMIT $limit"
 
-            context.contentResolver.query(
-                CalendarContract.Events.CONTENT_URI,
-                projection,
-                selection,
-                selectionArgs,
-                sortOrder
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(CalendarContract.Events._ID)
-                val titleCol = cursor.getColumnIndexOrThrow(CalendarContract.Events.TITLE)
-                val descCol = cursor.getColumnIndex(CalendarContract.Events.DESCRIPTION)
-                val startCol = cursor.getColumnIndexOrThrow(CalendarContract.Events.DTSTART)
-                val locCol = cursor.getColumnIndex(CalendarContract.Events.EVENT_LOCATION)
+            val cursor = try {
+                context.contentResolver.query(
+                    CalendarContract.Events.CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
+            } catch (e: SecurityException) {
+                logProviderDebug(ProviderType.CALENDAR, CalendarContract.Events.CONTENT_URI, QueryStage.PERMISSION_CHECK, e)
+                return ProviderQueryResult.PermissionRequired
+            } catch (e: Exception) {
+                logProviderDebug(ProviderType.CALENDAR, CalendarContract.Events.CONTENT_URI, QueryStage.RESOLVER_QUERY, e)
+                return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+            }
 
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idCol)
-                    val title = cursor.getString(titleCol) ?: "Event"
-                    val desc = if (descCol >= 0) cursor.getString(descCol) else null
-                    val start = cursor.getLong(startCol)
-                    val loc = if (locCol >= 0) cursor.getString(locCol) else null
+            cursor?.use { c ->
+                try {
+                    val idCol = c.getColumnIndexOrThrow(CalendarContract.Events._ID)
+                    val titleCol = c.getColumnIndexOrThrow(CalendarContract.Events.TITLE)
+                    val descCol = c.getColumnIndex(CalendarContract.Events.DESCRIPTION)
+                    val startCol = c.getColumnIndexOrThrow(CalendarContract.Events.DTSTART)
+                    val locCol = c.getColumnIndex(CalendarContract.Events.EVENT_LOCATION)
 
-                    results.add(CalendarSearchResult(id, title, desc, start, loc))
+                    while (c.moveToNext()) {
+                        val id = c.getLong(idCol)
+                        val title = c.getString(titleCol) ?: "Event"
+                        val desc = if (descCol >= 0) c.getString(descCol) else null
+                        val start = c.getLong(startCol)
+                        val loc = if (locCol >= 0) c.getString(locCol) else null
+
+                        results.add(CalendarSearchResult(id, title, desc, start, loc))
+                    }
+                } catch (e: Exception) {
+                    logProviderDebug(ProviderType.CALENDAR, CalendarContract.Events.CONTENT_URI, QueryStage.CURSOR_ITERATION, e)
+                    return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
                 }
             }
-        } catch (e: Exception) { }
+        } catch (e: SecurityException) {
+            logProviderDebug(ProviderType.CALENDAR, CalendarContract.Events.CONTENT_URI, QueryStage.PERMISSION_CHECK, e)
+            return ProviderQueryResult.PermissionRequired
+        } catch (e: Exception) {
+            logProviderDebug(ProviderType.CALENDAR, CalendarContract.Events.CONTENT_URI, QueryStage.MAP_RESULTS, e)
+            return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+        }
 
-        return results
+        return if (results.isEmpty()) ProviderQueryResult.NoResults else ProviderQueryResult.Success(results)
+    }
+
+    fun searchCalendar(context: Context, query: String, limit: Int = 5): List<CalendarSearchResult> {
+        return searchCalendarResult(context, query, limit).getOrEmpty()
     }
 }

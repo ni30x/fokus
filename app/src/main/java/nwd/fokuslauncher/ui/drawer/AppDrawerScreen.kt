@@ -1,7 +1,10 @@
 package nwd.fokuslauncher.ui.drawer
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -215,30 +218,42 @@ private fun LazyItemScope.ReorderableDrawerAppRow(
         rowAlpha: Float = 1f,
         content: @Composable RowScope.() -> Unit,
 ) {
-    val animatedAlpha by animateFloatAsState(targetValue = rowAlpha, label = "rowAlpha")
+    val reorderModifier = if (allowCustomDragReorder && placementAnimationEnabled) {
+        Modifier.animateItem(
+            fadeInSpec = null,
+            fadeOutSpec = null,
+            placementSpec = tween(
+                180,
+                easing = FastOutSlowInEasing,
+            ),
+        )
+    } else {
+        Modifier
+    }
+
+    val visualTransformModifier = when {
+        offsetY != 0f -> {
+            Modifier.graphicsLayer {
+                translationY = offsetY
+                if (rowAlpha < 1f) {
+                    alpha = rowAlpha
+                }
+            }
+        }
+        rowAlpha < 1f -> {
+            Modifier.graphicsLayer {
+                alpha = rowAlpha
+            }
+        }
+        else -> Modifier
+    }
+
     Row(
             modifier =
-                    Modifier.then(
-                                    if (allowCustomDragReorder && placementAnimationEnabled) {
-                                        Modifier.animateItem(
-                                                fadeInSpec = null,
-                                                fadeOutSpec = null,
-                                                placementSpec =
-                                                        tween(
-                                                                180,
-                                                                easing = FastOutSlowInEasing,
-                                                        ),
-                                        )
-                                    } else {
-                                        Modifier
-                                    }
-                            )
+                    Modifier.then(reorderModifier)
                             .fillMaxWidth()
                             .heightIn(min = 56.dp)
-                            .graphicsLayer { 
-                                translationY = offsetY
-                                alpha = animatedAlpha
-                            },
+                            .then(visualTransformModifier),
             verticalAlignment = Alignment.CenterVertically,
     ) {
         if (allowCustomDragReorder) {
@@ -429,7 +444,10 @@ private fun DrawerAppListColumn(
         allowCustomDragReorder: Boolean,
         activeLetter: String?,
         onReorderProfileSection: (sectionId: String, fromIndex: Int, toIndex: Int) -> Unit,
-        onReorderPrivateApps: (fromIndex: Int, toIndex: Int) -> Unit
+        onReorderPrivateApps: (fromIndex: Int, toIndex: Int) -> Unit,
+        onAddSearchFolder: (Uri) -> Unit = {},
+        onRemoveSearchFolder: (Long, String) -> Unit = { _, _ -> },
+        onReindexSearchFolders: () -> Unit = {}
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
     val closeWithFocusReset: () -> Unit = {
@@ -483,11 +501,18 @@ private fun DrawerAppListColumn(
 
     val drawerContext = LocalContext.current
     var permissionCheckTrigger by remember { mutableIntStateOf(0) }
+    var mediaPermissionDenied by remember { mutableStateOf(false) }
     
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) {
+    ) { results ->
         permissionCheckTrigger++
+        val anyGranted = results.values.any { it }
+        if (!anyGranted && results.isNotEmpty()) {
+            mediaPermissionDenied = true
+        } else {
+            mediaPermissionDenied = false
+        }
     }
 
     val permissionsToRequest = remember {
@@ -509,32 +534,83 @@ private fun DrawerAppListColumn(
         }
     }
 
-    val hasVisualMediaPermission = remember(permissionCheckTrigger, uiState.searchQuery) {
+    val openDocumentTreeLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            onAddSearchFolder(uri)
+        }
+    }
+
+    var showManageFoldersSheet by remember { mutableStateOf(false) }
+
+    if (showManageFoldersSheet) {
+        ManageIndexedFoldersBottomSheet(
+            folders = uiState.indexedFolders,
+            isIndexing = uiState.isIndexingDocuments,
+            onDismiss = { showManageFoldersSheet = false },
+            onAddFolder = { openDocumentTreeLauncher.launch(null) },
+            onRemoveFolder = onRemoveSearchFolder,
+            onReindexAll = onReindexSearchFolders
+        )
+    }
+
+    val mediaPermissionStatus = remember(permissionCheckTrigger, uiState.searchQuery, mediaPermissionDenied) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            (ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED &&
-             ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED) ||
-             ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+            val hasImages = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+            val hasVideo = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+            val hasUserSelected = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+            val hasAudio = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+            if (hasImages && hasVideo && hasAudio) {
+                MediaPermissionStatus.GRANTED
+            } else if (hasUserSelected && !hasImages) {
+                MediaPermissionStatus.PARTIAL
+            } else if (hasImages || hasVideo || hasAudio) {
+                MediaPermissionStatus.GRANTED
+            } else if (mediaPermissionDenied) {
+                MediaPermissionStatus.DENIED
+            } else {
+                MediaPermissionStatus.REQUIRED
+            }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+            val hasImages = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+            val hasVideo = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+            val hasAudio = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+            if (hasImages || hasVideo || hasAudio) {
+                MediaPermissionStatus.GRANTED
+            } else if (mediaPermissionDenied) {
+                MediaPermissionStatus.DENIED
+            } else {
+                MediaPermissionStatus.REQUIRED
+            }
         } else {
-            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            val hasStorage = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            if (hasStorage) {
+                MediaPermissionStatus.GRANTED
+            } else if (mediaPermissionDenied) {
+                MediaPermissionStatus.DENIED
+            } else {
+                MediaPermissionStatus.REQUIRED
+            }
         }
     }
 
-    val hasAudioMediaPermission = remember(permissionCheckTrigger, uiState.searchQuery) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    val hasStoragePermission = hasVisualMediaPermission || hasAudioMediaPermission
+    val hasAnyAppMatches = displayProfileSections.any { it.apps.isNotEmpty() } || (uiState.isPrivateSpaceUnlocked && displayPrivateApps.isNotEmpty())
+    val hasAnyMatches = hasAnyAppMatches ||
+        uiState.settingsResults.isNotEmpty() ||
+        uiState.mediaResults.isNotEmpty() ||
+        uiState.documentResults.isNotEmpty() ||
+        uiState.contactResults.isNotEmpty() ||
+        uiState.callLogResults.isNotEmpty() ||
+        uiState.messageResults.isNotEmpty() ||
+        uiState.calendarResults.isNotEmpty() ||
+        uiState.quickActionResult != null
 
     LazyColumn(state = listState, modifier = modifier) {
         if (uiState.searchQuery.isNotBlank()) {
-            item(key = "app_target_chips") {
+            item(key = "app_target_chips", contentType = "target_chips") {
                 AppTargetChipsList(
                     query = uiState.searchQuery,
                     chips = uiState.targetAppChips,
@@ -545,7 +621,7 @@ private fun DrawerAppListColumn(
                 )
             }
             uiState.quickActionResult?.let { result ->
-                item(key = "quick_action_card") {
+                item(key = "quick_action_card", contentType = "quick_action_card") {
                     InLineQuickActionCard(result = result)
                 }
             }
@@ -557,9 +633,9 @@ private fun DrawerAppListColumn(
                 val showSectionLabel = section.id != "owner"
                 if (showSectionLabel) {
                     if (hasEmittedProfileListContent) {
-                        item(key = "div_profile_${section.id}") { DrawerListSectionDivider() }
+                        item(key = "div_profile_${section.id}", contentType = "divider") { DrawerListSectionDivider() }
                     }
-                    item(key = "hdr_profile_${section.id}") {
+                    item(key = "hdr_profile_${section.id}", contentType = "header") {
                         DrawerListSectionHeader(text = section.title)
                     }
                 }
@@ -568,7 +644,8 @@ private fun DrawerAppListColumn(
                         count = section.apps.size,
                         key = { index ->
                             "${section.id}_${appListStableKey(section.apps[index])}"
-                        }
+                        },
+                        contentType = { "app_row" }
                 ) { index ->
                     val app = section.apps[index]
                     val currentIndex by rememberUpdatedState(index)
@@ -584,11 +661,63 @@ private fun DrawerAppListColumn(
                                 0f
                             }
                     val isFadedOut = activeLetter != null && if (activeLetter == "#") {
-                        app.label.firstOrNull()?.isLetter() == true
+                        val first = app.label.firstOrNull()
+                        first != null && first.isLetter()
                     } else {
                         !app.label.startsWith(activeLetter, ignoreCase = true)
                     }
                     val rowAlpha = if (isFadedOut) 0.3f else 1f
+
+                    val dragHandleModifier = if (allowCustomDragReorder) {
+                        Modifier.pointerInput(
+                                section.id,
+                                appListStableKey(app),
+                        ) {
+                            detectVerticalDragGestures(
+                                    onDragStart = {
+                                        draggedProfileSectionId = section.id
+                                        draggedProfileIndex = currentIndex
+                                        profileDragOffset = 0f
+                                    },
+                                    onVerticalDrag = { change, amount ->
+                                        change.consume()
+                                        val sectionApps = latestSectionApps.value
+                                        if (draggedProfileSectionId == section.id &&
+                                                        draggedProfileIndex in sectionApps.indices
+                                        ) {
+                                            profileDragOffset += amount
+                                            val (newOff, newIdx) =
+                                                    applyVerticalSlotReorder(
+                                                            itemHeightPx,
+                                                            profileDragOffset,
+                                                            draggedProfileIndex,
+                                                            sectionApps.lastIndex,
+                                                    ) { from, to ->
+                                                        optimisticProfileSections =
+                                                                applyOptimisticProfileSwap(
+                                                                        optimisticProfileSections,
+                                                                        latestDisplayProfileSections,
+                                                                        section.id,
+                                                                        from,
+                                                                        to
+                                                                )
+                                                        currentOnReorderProfile(
+                                                                section.id,
+                                                                from,
+                                                                to
+                                                        )
+                                                    }
+                                            profileDragOffset = newOff
+                                            draggedProfileIndex = newIdx
+                                        }
+                                    },
+                                    onDragEnd = { resetProfileDrag() },
+                                    onDragCancel = { resetProfileDrag() }
+                            )
+                        }
+                    } else {
+                        Modifier
+                    }
 
                     ReorderableDrawerAppListItem(
                             app = app,
@@ -596,53 +725,7 @@ private fun DrawerAppListColumn(
                             isDraggedRow = isDraggedRow,
                             offsetY = offsetY,
                             rowAlpha = rowAlpha,
-                            dragHandleModifier =
-                                    Modifier.pointerInput(
-                                            section.id,
-                                            appListStableKey(app),
-                                    ) {
-                                        detectVerticalDragGestures(
-                                                onDragStart = {
-                                                    draggedProfileSectionId = section.id
-                                                    draggedProfileIndex = currentIndex
-                                                    profileDragOffset = 0f
-                                                },
-                                                onVerticalDrag = { change, amount ->
-                                                    change.consume()
-                                                    val sectionApps = latestSectionApps.value
-                                                    if (draggedProfileSectionId == section.id &&
-                                                                    draggedProfileIndex in sectionApps.indices
-                                                    ) {
-                                                        profileDragOffset += amount
-                                                        val (newOff, newIdx) =
-                                                                applyVerticalSlotReorder(
-                                                                        itemHeightPx,
-                                                                        profileDragOffset,
-                                                                        draggedProfileIndex,
-                                                                        sectionApps.lastIndex,
-                                                                ) { from, to ->
-                                                                    optimisticProfileSections =
-                                                                            applyOptimisticProfileSwap(
-                                                                                    optimisticProfileSections,
-                                                                                    latestDisplayProfileSections,
-                                                                                    section.id,
-                                                                                    from,
-                                                                                    to
-                                                                            )
-                                                                    currentOnReorderProfile(
-                                                                            section.id,
-                                                                            from,
-                                                                            to
-                                                                    )
-                                                                }
-                                                        profileDragOffset = newOff
-                                                        draggedProfileIndex = newIdx
-                                                    }
-                                                },
-                                                onDragEnd = { resetProfileDrag() },
-                                                onDragCancel = { resetProfileDrag() }
-                                        )
-                                    },
+                            dragHandleModifier = dragHandleModifier,
                             onLaunchWhenNotReordering = {
                                 onAppClick(launchTargetFromAppInfo(app))
                             },
@@ -657,9 +740,9 @@ private fun DrawerAppListColumn(
         }
         if (uiState.isPrivateSpaceUnlocked && displayPrivateApps.isNotEmpty()) {
             if (showProfileSections && anyProfileAppsVisible) {
-                item { DrawerListSectionDivider() }
+                item(key = "div_private_space", contentType = "divider") { DrawerListSectionDivider() }
             }
-            item {
+            item(key = "hdr_private_space", contentType = "header") {
                 DrawerListSectionHeader(
                         text = stringResource(R.string.drawer_section_private_space)
                 )
@@ -668,7 +751,8 @@ private fun DrawerAppListColumn(
                     count = displayPrivateApps.size,
                     key = { index ->
                         "private_${appListStableKey(displayPrivateApps[index])}"
-                    }
+                    },
+                    contentType = { "app_row" }
             ) { index ->
                 val app = displayPrivateApps[index]
                 val currentIndex by rememberUpdatedState(index)
@@ -681,11 +765,54 @@ private fun DrawerAppListColumn(
                             0f
                         }
                 val isFadedOut = activeLetter != null && if (activeLetter == "#") {
-                    app.label.firstOrNull()?.isLetter() == true
+                    val first = app.label.firstOrNull()
+                    first != null && first.isLetter()
                 } else {
                     !app.label.startsWith(activeLetter, ignoreCase = true)
                 }
                 val rowAlpha = if (isFadedOut) 0.3f else 1f
+
+                val dragHandleModifier = if (allowCustomDragReorder) {
+                    Modifier.pointerInput(
+                            appListStableKey(app),
+                            latestDisplayPrivateApps.size,
+                    ) {
+                        detectVerticalDragGestures(
+                                onDragStart = {
+                                    draggedPrivateIndex = currentIndex
+                                    privateDragOffset = 0f
+                                },
+                                onVerticalDrag = { change, amount ->
+                                    change.consume()
+                                    if (draggedPrivateIndex in latestDisplayPrivateApps.indices) {
+                                        privateDragOffset += amount
+                                        val (newOff, newIdx) =
+                                                applyVerticalSlotReorder(
+                                                        itemHeightPx,
+                                                        privateDragOffset,
+                                                        draggedPrivateIndex,
+                                                        latestDisplayPrivateApps.lastIndex,
+                                                ) { from, to ->
+                                                    optimisticPrivateApps =
+                                                            applyOptimisticPrivateSwap(
+                                                                    optimisticPrivateApps,
+                                                                    latestDisplayPrivateApps,
+                                                                    from,
+                                                                    to
+                                                            )
+                                                    currentOnReorderPrivate(from, to)
+                                                }
+                                        privateDragOffset = newOff
+                                        draggedPrivateIndex = newIdx
+                                    }
+                                },
+                                onDragEnd = { resetPrivateDrag() },
+                                onDragCancel = { resetPrivateDrag() }
+                        )
+                    }
+                } else {
+                    Modifier
+                }
 
                 ReorderableDrawerAppListItem(
                         app = app,
@@ -693,44 +820,7 @@ private fun DrawerAppListColumn(
                         isDraggedRow = isDraggedRow,
                         offsetY = offsetY,
                         rowAlpha = rowAlpha,
-                        dragHandleModifier =
-                                Modifier.pointerInput(
-                                        appListStableKey(app),
-                                        latestDisplayPrivateApps.size,
-                                ) {
-                                    detectVerticalDragGestures(
-                                            onDragStart = {
-                                                draggedPrivateIndex = currentIndex
-                                                privateDragOffset = 0f
-                                            },
-                                            onVerticalDrag = { change, amount ->
-                                                change.consume()
-                                                if (draggedPrivateIndex in latestDisplayPrivateApps.indices) {
-                                                    privateDragOffset += amount
-                                                    val (newOff, newIdx) =
-                                                            applyVerticalSlotReorder(
-                                                                    itemHeightPx,
-                                                                    privateDragOffset,
-                                                                    draggedPrivateIndex,
-                                                                    latestDisplayPrivateApps.lastIndex,
-                                                            ) { from, to ->
-                                                                optimisticPrivateApps =
-                                                                        applyOptimisticPrivateSwap(
-                                                                                optimisticPrivateApps,
-                                                                                latestDisplayPrivateApps,
-                                                                                from,
-                                                                                to
-                                                                        )
-                                                                currentOnReorderPrivate(from, to)
-                                                            }
-                                                    privateDragOffset = newOff
-                                                    draggedPrivateIndex = newIdx
-                                                }
-                                            },
-                                            onDragEnd = { resetPrivateDrag() },
-                                            onDragCancel = { resetPrivateDrag() }
-                                    )
-                                },
+                        dragHandleModifier = dragHandleModifier,
                         onLaunchWhenNotReordering = {
                             val componentName = app.componentName
                             val userHandle = app.userHandle
@@ -756,16 +846,38 @@ private fun DrawerAppListColumn(
             universalSearchResults(
                 context = drawerContext,
                 settingsResults = uiState.settingsResults,
+                mediaResults = uiState.mediaResults,
+                documentResults = uiState.documentResults,
                 fileResults = uiState.fileResults,
                 contactResults = uiState.contactResults,
                 callLogResults = uiState.callLogResults,
                 messageResults = uiState.messageResults,
                 calendarResults = uiState.calendarResults,
-                hasStoragePermission = hasStoragePermission,
-                hasVisualMediaPermission = hasVisualMediaPermission,
-                hasAudioMediaPermission = hasAudioMediaPermission,
-                onRequestStoragePermission = {
+                indexedFolders = uiState.indexedFolders,
+                totalIndexedDocuments = uiState.totalIndexedDocuments,
+                isIndexingDocuments = uiState.isIndexingDocuments,
+                mediaPermissionStatus = mediaPermissionStatus,
+                hasAnyMatches = hasAnyMatches,
+                searchQuery = uiState.searchQuery,
+                onRequestMediaPermission = {
                     permissionLauncher.launch(permissionsToRequest)
+                },
+                onOpenAppSettings = {
+                    try {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", drawerContext.packageName, null)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        drawerContext.startActivity(intent)
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(drawerContext, "Cannot open settings", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onChooseFolder = {
+                    openDocumentTreeLauncher.launch(null)
+                },
+                onOpenManageFolders = {
+                    showManageFoldersSheet = true
                 },
                 onCloseDrawer = closeWithFocusReset
             )
@@ -788,6 +900,9 @@ private fun ColumnScope.DrawerAppListBody(
         activeLetter: String?,
         onReorderDrawerProfileSection: (sectionId: String, fromIndex: Int, toIndex: Int) -> Unit,
         onReorderPrivateDrawerApps: (fromIndex: Int, toIndex: Int) -> Unit,
+        onAddSearchFolder: (Uri) -> Unit = {},
+        onRemoveSearchFolder: (Long, String) -> Unit = { _, _ -> },
+        onReindexSearchFolders: () -> Unit = {}
 ) {
     DrawerAppListColumn(
             listState = listState,
@@ -806,6 +921,9 @@ private fun ColumnScope.DrawerAppListBody(
             activeLetter = activeLetter,
             onReorderProfileSection = onReorderDrawerProfileSection,
             onReorderPrivateApps = onReorderPrivateDrawerApps,
+            onAddSearchFolder = onAddSearchFolder,
+            onRemoveSearchFolder = onRemoveSearchFolder,
+            onReindexSearchFolders = onReindexSearchFolders,
     )
 }
 
@@ -885,7 +1003,10 @@ fun AppDrawerScreen(
             onToggleDrawerReorderApps = viewModel::toggleDrawerReorderSession,
             onClose = closeAndReset,
             onReorderDrawerProfileSection = viewModel::reorderDrawerProfileSectionApps,
-            onReorderPrivateDrawerApps = viewModel::reorderPrivateDrawerApps
+            onReorderPrivateDrawerApps = viewModel::reorderPrivateDrawerApps,
+            onAddSearchFolder = viewModel::addSearchFolder,
+            onRemoveSearchFolder = viewModel::removeSearchFolder,
+            onReindexSearchFolders = viewModel::reindexSearchFolders
     )
 
     // Action sheet on long-press
@@ -949,7 +1070,10 @@ fun AppDrawerContent(
         onClose: () -> Unit = {},
         onReorderDrawerProfileSection: (sectionId: String, fromIndex: Int, toIndex: Int) -> Unit =
                 { _, _, _ -> },
-        onReorderPrivateDrawerApps: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> }
+        onReorderPrivateDrawerApps: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> },
+        onAddSearchFolder: (Uri) -> Unit = {},
+        onRemoveSearchFolder: (Long, String) -> Unit = { _, _ -> },
+        onReindexSearchFolders: () -> Unit = {}
 ) {
     val drawerContext = LocalContext.current
     val focusRequester = remember { FocusRequester() }
@@ -1026,55 +1150,68 @@ fun AppDrawerContent(
     val hideCharacterScroll = !uiState.drawerShowScrollbar
 
     val selectLetter: (String, Boolean) -> Unit = { letter, isDrag ->
-        activeLetter = letter
-        
-        var currentIndex = 0
-        var targetIndex = -1
-        
-        // Count Target Chips
-        if (uiState.searchQuery.isNotBlank()) {
-            currentIndex++
-            if (uiState.quickActionResult != null) {
+        val isSameLetter = (letter == activeLetter)
+        if (!isSameLetter) {
+            activeLetter = letter
+            
+            var currentIndex = 0
+            var targetIndex = -1
+            
+            // Count Target Chips
+            if (uiState.searchQuery.isNotBlank()) {
                 currentIndex++
-            }
-        }
-        
-        if (showProfileSections) {
-            var hasEmittedProfileListContent = false
-            for (section in uiState.filteredProfileSections) {
-                if (section.apps.isEmpty()) continue
-                val showSectionLabel = section.id != "owner"
-                if (showSectionLabel) {
-                    if (hasEmittedProfileListContent) currentIndex++
+                if (uiState.quickActionResult != null) {
                     currentIndex++
                 }
-                hasEmittedProfileListContent = true
-                for (app in section.apps) {
+            }
+            
+            if (showProfileSections) {
+                var hasEmittedProfileListContent = false
+                for (section in uiState.filteredProfileSections) {
+                    if (section.apps.isEmpty()) continue
+                    val showSectionLabel = section.id != "owner"
+                    if (showSectionLabel) {
+                        if (hasEmittedProfileListContent) currentIndex++
+                        currentIndex++
+                    }
+                    hasEmittedProfileListContent = true
+                    for (app in section.apps) {
+                        val appName = app.label
+                        val startsWithLetter = if (letter == "#") {
+                            val first = appName.firstOrNull()
+                            first == null || !first.isLetter()
+                        } else {
+                            appName.startsWith(letter, ignoreCase = true)
+                        }
+                        if (targetIndex == -1 && startsWithLetter) {
+                            targetIndex = currentIndex
+                        }
+                        currentIndex++
+                    }
+                }
+            }
+            if (uiState.isPrivateSpaceUnlocked && uiState.filteredPrivateSpaceApps.isNotEmpty()) {
+                if (showProfileSections && anyProfileAppsVisible) {
+                    currentIndex++
+                }
+                currentIndex++
+                for (app in uiState.filteredPrivateSpaceApps) {
                     val appName = app.label
-                    val startsWithLetter = if (letter == "#") !appName.firstOrNull()?.isLetter()!! else appName.startsWith(letter, ignoreCase = true)
+                    val startsWithLetter = if (letter == "#") {
+                        val first = appName.firstOrNull()
+                        first == null || !first.isLetter()
+                    } else {
+                        appName.startsWith(letter, ignoreCase = true)
+                    }
                     if (targetIndex == -1 && startsWithLetter) {
                         targetIndex = currentIndex
                     }
                     currentIndex++
                 }
             }
-        }
-        if (uiState.isPrivateSpaceUnlocked && uiState.filteredPrivateSpaceApps.isNotEmpty()) {
-            if (showProfileSections && anyProfileAppsVisible) {
-                currentIndex++
+            if (targetIndex != -1) {
+                scope.launch { listState.scrollToItem(targetIndex) }
             }
-            currentIndex++
-            for (app in uiState.filteredPrivateSpaceApps) {
-                val appName = app.label
-                val startsWithLetter = if (letter == "#") !appName.firstOrNull()?.isLetter()!! else appName.startsWith(letter, ignoreCase = true)
-                if (targetIndex == -1 && startsWithLetter) {
-                        targetIndex = currentIndex
-                }
-                currentIndex++
-            }
-        }
-        if (targetIndex != -1) {
-            scope.launch { listState.scrollToItem(targetIndex) }
         }
         
         if (!isDrag) {
@@ -1252,6 +1389,9 @@ fun AppDrawerContent(
                 activeLetter = activeLetter,
                 onReorderDrawerProfileSection = onReorderDrawerProfileSection,
                 onReorderPrivateDrawerApps = onReorderPrivateDrawerApps,
+                onAddSearchFolder = onAddSearchFolder,
+                onRemoveSearchFolder = onRemoveSearchFolder,
+                onReindexSearchFolders = onReindexSearchFolders,
         )
     }
 

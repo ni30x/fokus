@@ -52,11 +52,17 @@ fun LazyListScope.profileGroupedAppItems(
         val showSectionLabel = section.id != "owner"
         if (showSectionLabel) {
             if (hasEmitted) {
-                item(key = "${keyPrefix}_div_${section.id}") {
+                item(
+                        key = "${keyPrefix}_div_${section.id}",
+                        contentType = "divider",
+                ) {
                     DrawerListSectionDivider(horizontalPadding = horizontalPadding)
                 }
             }
-            item(key = "${keyPrefix}_hdr_${section.id}") {
+            item(
+                    key = "${keyPrefix}_hdr_${section.id}",
+                    contentType = "header",
+            ) {
                 DrawerListSectionHeader(
                         text = section.title,
                         horizontalPadding = horizontalPadding,
@@ -67,6 +73,7 @@ fun LazyListScope.profileGroupedAppItems(
         items(
                 items = section.apps,
                 key = { "${keyPrefix}_${section.id}_${appListStableKey(it)}" },
+                contentType = { "app_row" },
         ) { app ->
             itemContent(app)
         }
@@ -90,11 +97,17 @@ fun LazyListScope.profileGroupedShortcutItems(
         val showSectionLabel = section.id != "owner"
         if (showSectionLabel) {
             if (hasEmitted) {
-                item(key = "${keyPrefix}_div_${section.id}") {
+                item(
+                        key = "${keyPrefix}_div_${section.id}",
+                        contentType = "divider",
+                ) {
                     DrawerListSectionDivider(horizontalPadding = horizontalPadding)
                 }
             }
-            item(key = "${keyPrefix}_hdr_${section.id}") {
+            item(
+                    key = "${keyPrefix}_hdr_${section.id}",
+                    contentType = "header",
+            ) {
                 DrawerListSectionHeader(
                         text = section.title,
                         horizontalPadding = horizontalPadding,
@@ -123,7 +136,10 @@ fun LazyListScope.profileGroupedShortcutItems(
                     } else {
                         baseHeadline
                     }
-            item(key = "${keyPrefix}_app_${section.id}_$groupKey") {
+            item(
+                    key = "${keyPrefix}_app_${section.id}_$groupKey",
+                    contentType = "shortcut_headline",
+            ) {
                 Text(
                         text = headline,
                         style = MaterialTheme.typography.titleSmall,
@@ -149,6 +165,7 @@ fun LazyListScope.profileGroupedShortcutItems(
             items(
                     items = sortedForApp,
                     key = { "${keyPrefix}_${section.id}_${it.id}" },
+                    contentType = { "shortcut_action_row" },
             ) { action ->
                 itemContent(action)
             }
