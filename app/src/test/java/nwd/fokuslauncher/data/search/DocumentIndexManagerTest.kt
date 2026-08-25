@@ -1,22 +1,21 @@
 package nwd.fokuslauncher.data.search
 
-import android.content.Context
-import android.net.Uri
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.unmockkAll
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import nwd.fokuslauncher.data.database.dao.IndexedDocumentDao
 import nwd.fokuslauncher.data.database.entity.IndexedDocumentEntity
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class DocumentIndexManagerTest {
 
     private lateinit var indexedDocumentDao: IndexedDocumentDao
@@ -29,11 +28,6 @@ class DocumentIndexManagerTest {
         every { indexedDocumentDao.getAllFoldersFlow() } returns flowOf(emptyList())
         every { indexedDocumentDao.getTotalDocumentCountFlow() } returns flowOf(0)
         documentIndexManager = DocumentIndexManager(indexedDocumentDao, testDispatcher)
-    }
-
-    @After
-    fun tearDown() {
-        unmockkAll()
     }
 
     @Test
@@ -49,6 +43,8 @@ class DocumentIndexManagerTest {
             IndexedDocumentEntity(
                 id = 1L,
                 folderId = 10L,
+                treeUri = "content://com.android.externalstorage.documents/tree/primary%3ADocuments",
+                documentId = "primary:Documents/Annual_Report_2026.pdf",
                 documentUri = "content://com.android.providers.downloads.documents/document/1",
                 displayName = "Annual_Report_2026.pdf",
                 mimeType = "application/pdf",

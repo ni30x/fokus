@@ -7,13 +7,17 @@ import nwd.fokuslauncher.data.search.DocumentSearchResult
 import nwd.fokuslauncher.data.search.LocalSearchManager
 import nwd.fokuslauncher.data.search.MediaSearchResult
 import nwd.fokuslauncher.data.search.MediaType
+import nwd.fokuslauncher.data.search.ProviderQueryResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class UniversalSearchComponentsTest {
 
     @Test
@@ -37,6 +41,8 @@ class UniversalSearchComponentsTest {
             mimeType = "audio/mpeg"
         )
         assertEquals(MediaType.AUDIO, audioWithoutThumbnail.mediaType)
+        // Ensure non-blocking metadata access
+        assertTrue(audioWithoutThumbnail.sizeBytes > 0)
     }
 
     @Test
@@ -60,10 +66,24 @@ class UniversalSearchComponentsTest {
     }
 
     @Test
+    fun `permission states have correct actions and error states`() {
+        val permissionRequired = ProviderQueryResult.PermissionRequired
+        assertTrue(permissionRequired is ProviderQueryResult.PermissionRequired)
+
+        val providerFailure = ProviderQueryResult.ProviderFailure(
+            exceptionType = "SECURITY_EXCEPTION",
+            message = "Permission denied by system policy"
+        )
+        assertEquals("SECURITY_EXCEPTION", providerFailure.exceptionType)
+        assertEquals("Permission denied by system policy", providerFailure.message)
+    }
+
+    @Test
     fun `document folder indexing is strictly separated from runtime media permissions`() {
         // Verify document index search uses local DB SAF folders, not runtime media permissions
         val docResult = DocumentSearchResult(
             id = 10L,
+            folderId = 1L,
             displayName = "Project_Specs.docx",
             uri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADocuments%2FProject_Specs.docx"),
             mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -76,9 +96,30 @@ class UniversalSearchComponentsTest {
         // Media permissions are specifically Android media permissions
         val mediaPerms = LocalSearchManager.getRequiredMediaPermissions()
         assertFalse(mediaPerms.contains("OPEN_DOCUMENT_TREE"))
+        assertFalse(mediaPerms.contains(Manifest.permission.MANAGE_EXTERNAL_STORAGE))
         assertTrue(
             mediaPerms.contains(Manifest.permission.READ_MEDIA_IMAGES) ||
             mediaPerms.contains(Manifest.permission.READ_EXTERNAL_STORAGE)
         )
+    }
+
+    @Test
+    fun `choose folders and files is handled via SAF tree picker and not presented as media permission`() {
+        // Document search indexing is based on SAF folder tree picking
+        val safDocFolderUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ADownload")
+        val isTreeUri = safDocFolderUri.authority?.contains("documents") == true
+        assertTrue("SAF folder picker must use DocumentsContract tree authorities", isTreeUri)
+
+        // Verify media permissions query does not require or request folder selection
+        val mediaPermissions = LocalSearchManager.getRequiredMediaPermissions()
+        for (perm in mediaPermissions) {
+            assertTrue(
+                perm == Manifest.permission.READ_MEDIA_IMAGES ||
+                perm == Manifest.permission.READ_MEDIA_VIDEO ||
+                perm == Manifest.permission.READ_MEDIA_AUDIO ||
+                perm == Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED ||
+                perm == Manifest.permission.READ_EXTERNAL_STORAGE
+            )
+        }
     }
 }

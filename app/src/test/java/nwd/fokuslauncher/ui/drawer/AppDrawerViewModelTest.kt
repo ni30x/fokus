@@ -1269,13 +1269,13 @@ class AppDrawerViewModelTest {
     }
 
     @Test
-    fun `drawer stable ordering with MOST_USED mode`() {
+    fun `drawer stable ordering with MOST_OPENED mode`() {
         drawerAppOpenCountsFlow.value = mapOf(
-            "com.lu4p.twitter#0" to 100,
-            "com.lu4p.calculator#0" to 50,
-            "com.lu4p.atom#0" to 10
+            "0|com.lu4p.twitter" to 100,
+            "0|com.lu4p.calculator" to 50,
+            "0|com.lu4p.atom" to 10
         )
-        drawerAppSortModeFlow.value = DrawerAppSortMode.MOST_USED
+        drawerAppSortModeFlow.value = DrawerAppSortMode.MOST_OPENED
         testDispatcher.scheduler.advanceUntilIdle()
 
         val labels = flatFiltered(viewModel.uiState.value).map { it.label }
@@ -1332,6 +1332,7 @@ class AppDrawerViewModelTest {
 
     @Test
     fun `stale search request cannot overwrite subsequent search queries`() {
+        drawerSearchAutoLaunchFlow.value = false
         viewModel.onSearchQueryChanged("calc")
         testDispatcher.scheduler.advanceUntilIdle()
         assertEquals("calc", viewModel.uiState.value.searchQuery)

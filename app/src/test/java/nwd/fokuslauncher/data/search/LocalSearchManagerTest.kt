@@ -4,10 +4,8 @@ import android.Manifest
 import android.content.ContentResolver
 import android.content.Context
 import android.content.pm.PackageManager
-import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
-import android.os.Build
 import android.provider.CalendarContract
 import android.provider.CallLog
 import android.provider.ContactsContract
@@ -17,7 +15,7 @@ import androidx.core.content.ContextCompat
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
-import io.mockk.unmockkAll
+import io.mockk.unmockkStatic
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -25,7 +23,10 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class LocalSearchManagerTest {
 
     private lateinit var context: Context
@@ -41,7 +42,7 @@ class LocalSearchManagerTest {
 
     @After
     fun tearDown() {
-        unmockkAll()
+        unmockkStatic(ContextCompat::class)
     }
 
     @Test
@@ -96,7 +97,7 @@ class LocalSearchManagerTest {
             MediaStore.MediaColumns.MIME_TYPE,
             MediaStore.MediaColumns.TITLE
         ))
-        matrixCursor.addRow(arrayOf(101L, "vacation_beach.jpg", 1024L, "image/jpeg", "Beach Vacation"))
+        matrixCursor.addRow(arrayOf<Any?>(101L, "vacation_beach.jpg", 1024L, "image/jpeg", "Beach Vacation"))
 
         every {
             contentResolver.query(
@@ -108,7 +109,7 @@ class LocalSearchManagerTest {
             )
         } returns matrixCursor
 
-        val result = LocalSearchManager.searchMediaCollection(
+        val result = LocalSearchManager.queryMediaCollection(
             context = context,
             collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             mediaType = MediaType.IMAGE,
@@ -116,8 +117,8 @@ class LocalSearchManagerTest {
             limit = 10
         )
 
-        assertTrue(result is ProviderQueryResult.Success)
-        val list = (result as ProviderQueryResult.Success).data
+        assertTrue(result is ProviderQueryResult.Success<*>)
+        val list = (result as ProviderQueryResult.Success<MediaSearchResult>).data
         assertEquals(1, list.size)
         assertEquals("vacation_beach.jpg", list[0].displayName)
         assertEquals(MediaType.IMAGE, list[0].mediaType)
@@ -133,7 +134,7 @@ class LocalSearchManagerTest {
             MediaStore.MediaColumns.MIME_TYPE,
             MediaStore.MediaColumns.TITLE
         ))
-        matrixCursor.addRow(arrayOf(202L, "birthday_party.mp4", 5048000L, "video/mp4", "Party Video"))
+        matrixCursor.addRow(arrayOf<Any?>(202L, "birthday_party.mp4", 5048000L, "video/mp4", "Party Video"))
 
         every {
             contentResolver.query(
@@ -145,7 +146,7 @@ class LocalSearchManagerTest {
             )
         } returns matrixCursor
 
-        val result = LocalSearchManager.searchMediaCollection(
+        val result = LocalSearchManager.queryMediaCollection(
             context = context,
             collectionUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
             mediaType = MediaType.VIDEO,
@@ -153,8 +154,8 @@ class LocalSearchManagerTest {
             limit = 10
         )
 
-        assertTrue(result is ProviderQueryResult.Success)
-        val list = (result as ProviderQueryResult.Success).data
+        assertTrue(result is ProviderQueryResult.Success<*>)
+        val list = (result as ProviderQueryResult.Success<MediaSearchResult>).data
         assertEquals(1, list.size)
         assertEquals("birthday_party.mp4", list[0].displayName)
         assertEquals(MediaType.VIDEO, list[0].mediaType)
@@ -169,7 +170,7 @@ class LocalSearchManagerTest {
             MediaStore.MediaColumns.MIME_TYPE,
             MediaStore.MediaColumns.TITLE
         ))
-        matrixCursor.addRow(arrayOf(303L, "podcast_episode_1.mp3", 2048000L, "audio/mpeg", "Podcast Ep 1"))
+        matrixCursor.addRow(arrayOf<Any?>(303L, "podcast_episode_1.mp3", 2048000L, "audio/mpeg", "Podcast Ep 1"))
 
         every {
             contentResolver.query(
@@ -181,7 +182,7 @@ class LocalSearchManagerTest {
             )
         } returns matrixCursor
 
-        val result = LocalSearchManager.searchMediaCollection(
+        val result = LocalSearchManager.queryMediaCollection(
             context = context,
             collectionUri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
             mediaType = MediaType.AUDIO,
@@ -189,8 +190,8 @@ class LocalSearchManagerTest {
             limit = 10
         )
 
-        assertTrue(result is ProviderQueryResult.Success)
-        val list = (result as ProviderQueryResult.Success).data
+        assertTrue(result is ProviderQueryResult.Success<*>)
+        val list = (result as ProviderQueryResult.Success<MediaSearchResult>).data
         assertEquals(1, list.size)
         assertEquals("podcast_episode_1.mp3", list[0].displayName)
         assertEquals(MediaType.AUDIO, list[0].mediaType)
@@ -206,13 +207,13 @@ class LocalSearchManagerTest {
             ContactsContract.Contacts.HAS_PHONE_NUMBER,
             ContactsContract.Contacts.PHOTO_THUMBNAIL_URI
         ))
-        contactsCursor.addRow(arrayOf("10", "Alice Smith", 1, null))
+        contactsCursor.addRow(arrayOf<Any?>("10", "Alice Smith", 1, null))
 
         val phoneCursor = MatrixCursor(arrayOf(
             ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
             ContactsContract.CommonDataKinds.Phone.NUMBER
         ))
-        phoneCursor.addRow(arrayOf("10", "+1234567890"))
+        phoneCursor.addRow(arrayOf<Any?>("10", "+1234567890"))
 
         every {
             contentResolver.query(
@@ -235,11 +236,11 @@ class LocalSearchManagerTest {
         } returns phoneCursor
 
         val result = LocalSearchManager.searchContactsResult(context, "Alice")
-        assertTrue(result is ProviderQueryResult.Success)
-        val list = (result as ProviderQueryResult.Success).data
+        assertTrue(result is ProviderQueryResult.Success<*>)
+        val list = (result as ProviderQueryResult.Success<ContactSearchResult>).data
         assertEquals(1, list.size)
         assertEquals("Alice Smith", list[0].displayName)
-        assertEquals("+1234567890", list[0].primaryPhoneNumber)
+        assertEquals("+1234567890", list[0].phoneNumber)
     }
 
     @Test
@@ -262,7 +263,7 @@ class LocalSearchManagerTest {
             )
         } returns emptyCursor
 
-        val result = LocalSearchManager.searchMediaCollection(
+        val result = LocalSearchManager.queryMediaCollection(
             context = context,
             collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             mediaType = MediaType.IMAGE,
@@ -286,7 +287,7 @@ class LocalSearchManagerTest {
             )
         } throws IllegalStateException("Database disk image is malformed")
 
-        val result = LocalSearchManager.searchMediaCollection(
+        val result = LocalSearchManager.queryMediaCollection(
             context = context,
             collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             mediaType = MediaType.IMAGE,
@@ -319,7 +320,7 @@ class LocalSearchManagerTest {
             MediaStore.MediaColumns.MIME_TYPE,
             MediaStore.MediaColumns.TITLE
         ))
-        imageCursor.addRow(arrayOf(55L, "image_test.png", 500L, "image/png", "Test Image"))
+        imageCursor.addRow(arrayOf<Any?>(55L, "image_test.png", 500L, "image/png", "Test Image"))
 
         every {
             contentResolver.query(
@@ -332,8 +333,8 @@ class LocalSearchManagerTest {
         } returns imageCursor
 
         val result = LocalSearchManager.searchMediaResult(context, "test")
-        assertTrue(result is ProviderQueryResult.Success)
-        val items = (result as ProviderQueryResult.Success).data
+        assertTrue(result is ProviderQueryResult.Success<*>)
+        val items = (result as ProviderQueryResult.Success<MediaSearchResult>).data
         assertEquals(1, items.size)
         assertEquals("image_test.png", items[0].displayName)
     }
