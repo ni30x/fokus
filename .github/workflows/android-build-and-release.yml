@@ -38,15 +38,20 @@ jobs:
 
       - name: Generate debug keystore
         run: |
-          keytool -genkeypair -v -keystore debug.keystore -storepass android \
-            -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
-            -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v -keystore debug.keystore -storepass android \
+              -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
       - name: Run debug unit tests
         run: ./gradlew testDebugUnitTest
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug
+
+      - name: Validate release compilation and R8 optimization
+        run: ./gradlew :app:minifyReleaseWithR8
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
@@ -83,9 +88,11 @@ jobs:
 
       - name: Generate debug keystore
         run: |
-          keytool -genkeypair -v -keystore debug.keystore -storepass android \
-            -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
-            -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v -keystore debug.keystore -storepass android \
+              -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
       - name: Validate signing secrets
         env:
