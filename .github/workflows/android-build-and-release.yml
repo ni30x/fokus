@@ -1,6 +1,18 @@
 name: Android Auto APK Build & Release
 
 on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  release:
+    types:
+      - published
+      - created
   workflow_dispatch:
     inputs:
       build_type:
@@ -17,20 +29,6 @@ on:
         required: false
         default: true
         type: boolean
-  push:
-    branches:
-      - main
-      - master
-    tags:
-      - 'v*'
-  pull_request:
-    branches:
-      - main
-      - master
-  release:
-    types:
-      - published
-      - created
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,10 +36,11 @@ concurrency:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build-apks:
-    name: Build APKs
+    name: Build & Export APKs
     runs-on: ubuntu-latest
 
     steps:
@@ -61,17 +60,21 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: 'tools platform-tools platforms;android-36 build-tools;36.0.0'
 
-      - name: Ensure Debug Keystore Exists
+      - name: Accept Android SDK Licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Set up Debug Keystore
         run: |
-          if [ ! -f debug.keystore ]; then
+          if [ -f debug.keystore.base64 ]; then
+            echo "Restoring debug keystore from debug.keystore.base64..."
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f debug.keystore ]; then
             echo "Generating debug keystore..."
             keytool -genkeypair -v -keystore debug.keystore -storepass android \
               -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
@@ -88,12 +91,11 @@ jobs:
         run: |
           if [ -n "${ANDROID_KEYSTORE_B64}" ] && [ -n "${ANDROID_KEYSTORE_PASSWORD}" ] && [ -n "${ANDROID_KEY_ALIAS}" ] && [ -n "${ANDROID_KEY_PASSWORD}" ]; then
             echo "Release signing secrets found. Decoding keystore..."
-            mkdir -p "${{ runner.temp }}/keystore"
-            printf '%s' "${ANDROID_KEYSTORE_B64}" | base64 --decode > "${{ runner.temp }}/keystore/release.keystore"
+            printf '%s' "${ANDROID_KEYSTORE_B64}" | base64 --decode > release.keystore
             echo "has_signing=true" >> "$GITHUB_OUTPUT"
-            echo "keystore_path=${{ runner.temp }}/keystore/release.keystore" >> "$GITHUB_OUTPUT"
+            echo "keystore_path=release.keystore" >> "$GITHUB_OUTPUT"
           else
-            echo "Release signing secrets not fully provided. Building standard/unsigned APK..."
+            echo "Release signing secrets not fully provided. Building unsigned release APK..."
             echo "has_signing=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -108,7 +110,7 @@ jobs:
       - name: Build Release APK (Signed)
         if: ${{ steps.signing-check.outputs.has_signing == 'true' && (github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'release' || github.event_name != 'workflow_dispatch') }}
         env:
-          ANDROID_KEYSTORE_PATH: ${{ steps.signing-check.outputs.keystore_path }}
+          ANDROID_KEYSTORE_PATH: release.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -122,56 +124,56 @@ jobs:
         id: collect-apks
         run: |
           mkdir -p artifacts
-          echo "Listing all generated APKs:"
+          echo "Finding all built APKs..."
           find app/build/outputs/apk -type f -name '*.apk'
           
-          # Copy debug APK if exists
+          # Find and copy debug APK
           DEBUG_APK=$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)
           if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
             cp "$DEBUG_APK" artifacts/fokus-launcher-debug.apk
-            echo "Found debug APK: $DEBUG_APK"
+            echo "Copied debug APK -> artifacts/fokus-launcher-debug.apk"
           fi
 
-          # Copy release APK if exists
+          # Find and copy release APK
           RELEASE_APK=$(find app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)
           if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
             cp "$RELEASE_APK" artifacts/fokus-launcher-release.apk
-            echo "Found release APK: $RELEASE_APK"
+            echo "Copied release APK -> artifacts/fokus-launcher-release.apk"
           fi
 
-          echo "Final artifacts directory contents:"
+          echo "Generated artifacts in artifacts/:"
           ls -la artifacts/
 
-      - name: Upload Debug APK Artifact
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: fokus-launcher-debug-apk
           path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload Release APK Artifact
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: fokus-launcher-release-apk
           path: app/build/outputs/apk/release/*.apk
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload All Built APKs
+      - name: Upload All Built APK Artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: fokus-launcher-all-apks
           path: artifacts/*.apk
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Attach APKs to GitHub Release
         uses: softprops/action-gh-release@v2
-        if: ${{ github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ github.event_name == 'release' || startsWith(github.ref, 'refs/tags/') }}
         with:
           files: |
             artifacts/*.apk
