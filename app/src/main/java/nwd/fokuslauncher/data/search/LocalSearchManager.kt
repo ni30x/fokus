@@ -7,16 +7,19 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.CalendarContract
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.MediaStore
+import android.provider.Settings
 import android.provider.Telephony
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import java.io.File
 
 enum class ProviderType {
     MEDIA_IMAGES,
@@ -120,7 +123,57 @@ data class CalendarSearchResult(
     val location: String?
 )
 
+enum class MediaPermissionState {
+    FULL,
+    PARTIAL,
+    DENIED,
+    REQUIRED
+}
+
 object LocalSearchManager {
+
+    fun getMediaPermissionState(context: Context, isPermissionDeniedByUser: Boolean = false): MediaPermissionState {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val hasImages = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+            val hasVideo = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+            val hasUserSelected = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+            val hasAudio = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+            if (hasImages && hasVideo && hasAudio) {
+                MediaPermissionState.FULL
+            } else if (hasUserSelected && !hasImages && !hasVideo) {
+                MediaPermissionState.PARTIAL
+            } else if (hasImages || hasVideo || hasAudio) {
+                // If user granted some full media types (e.g. images only or audio only or userSelected + audio)
+                if (hasUserSelected) MediaPermissionState.PARTIAL else MediaPermissionState.FULL
+            } else if (isPermissionDeniedByUser) {
+                MediaPermissionState.DENIED
+            } else {
+                MediaPermissionState.REQUIRED
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasImages = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+            val hasVideo = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+            val hasAudio = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+            if (hasImages || hasVideo || hasAudio) {
+                MediaPermissionState.FULL
+            } else if (isPermissionDeniedByUser) {
+                MediaPermissionState.DENIED
+            } else {
+                MediaPermissionState.REQUIRED
+            }
+        } else {
+            val hasStorage = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            if (hasStorage) {
+                MediaPermissionState.FULL
+            } else if (isPermissionDeniedByUser) {
+                MediaPermissionState.DENIED
+            } else {
+                MediaPermissionState.REQUIRED
+            }
+        }
+    }
 
     fun hasVisualMediaPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -181,6 +234,43 @@ object LocalSearchManager {
             )
         } else {
             listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    /**
+     * Checks if broad file search access (MANAGE_EXTERNAL_STORAGE on Android 11+ or READ_EXTERNAL_STORAGE on Android <= 10) is granted.
+     */
+    fun hasBroadFileAccess(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    /**
+     * Creates an Intent to prompt the user to enable broad file search access.
+     * On Android 11+ (API 30+), opens Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION with the package URI.
+     * Falls back to standard application details settings if needed.
+     */
+    fun createBroadFileAccessIntent(context: Context): Intent {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+            } catch (e: Exception) {
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", context.packageName, null)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+            }
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
         }
     }
 
@@ -334,17 +424,151 @@ object LocalSearchManager {
         return searchMediaResult(context, query, limit).getOrEmpty()
     }
 
-    suspend fun searchFiles(context: Context, query: String, limit: Int = 10): List<FileSearchResult> {
-        val media = searchMedia(context, query, limit)
-        return media.map {
-            FileSearchResult(
-                id = it.id,
-                displayName = it.displayName,
-                path = it.uri.toString(),
-                sizeBytes = it.sizeBytes,
-                uri = it.uri,
-                mimeType = it.mimeType
+    fun searchBroadStorageFilesResult(
+        context: Context,
+        query: String,
+        limit: Int = 10
+    ): ProviderQueryResult<FileSearchResult> {
+        val trimmed = query.trim()
+        if (trimmed.length < 2) return ProviderQueryResult.NoResults
+
+        if (!hasBroadFileAccess(context)) {
+            logProviderDebug(ProviderType.DOCUMENTS, MediaStore.Files.getContentUri("external"), QueryStage.PERMISSION_CHECK, null)
+            return ProviderQueryResult.PermissionRequired
+        }
+
+        val results = mutableListOf<FileSearchResult>()
+        try {
+            val collectionUri = MediaStore.Files.getContentUri("external")
+            val projection = arrayOf(
+                MediaStore.Files.FileColumns._ID,
+                MediaStore.Files.FileColumns.DISPLAY_NAME,
+                MediaStore.Files.FileColumns.SIZE,
+                MediaStore.Files.FileColumns.MIME_TYPE,
+                MediaStore.Files.FileColumns.DATA
             )
+            val selection = "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR ${MediaStore.Files.FileColumns.TITLE} LIKE ?"
+            val selectionArgs = arrayOf("%$trimmed%", "%$trimmed%")
+            val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC LIMIT $limit"
+
+            val cursor = try {
+                context.contentResolver.query(
+                    collectionUri,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
+            } catch (e: SecurityException) {
+                logProviderDebug(ProviderType.DOCUMENTS, collectionUri, QueryStage.PERMISSION_CHECK, e)
+                return ProviderQueryResult.PermissionRequired
+            } catch (e: Exception) {
+                logProviderDebug(ProviderType.DOCUMENTS, collectionUri, QueryStage.RESOLVER_QUERY, e)
+                return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+            }
+
+            cursor?.use { c ->
+                try {
+                    val idCol = c.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+                    val nameCol = c.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                    val sizeCol = c.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+                    val mimeCol = c.getColumnIndex(MediaStore.Files.FileColumns.MIME_TYPE)
+                    val dataCol = c.getColumnIndex(MediaStore.Files.FileColumns.DATA)
+
+                    while (c.moveToNext()) {
+                        val id = c.getLong(idCol)
+                        val name = c.getString(nameCol) ?: "File"
+                        val size = c.getLong(sizeCol)
+                        val mime = if (mimeCol >= 0) c.getString(mimeCol) else null
+                        val path = if (dataCol >= 0) c.getString(dataCol) ?: "" else ""
+                        val fileUri = Uri.withAppendedPath(collectionUri, id.toString())
+
+                        results.add(
+                            FileSearchResult(
+                                id = id,
+                                displayName = name,
+                                path = path.ifEmpty { fileUri.toString() },
+                                sizeBytes = size,
+                                uri = fileUri,
+                                mimeType = mime
+                            )
+                        )
+                    }
+                } catch (e: Exception) {
+                    logProviderDebug(ProviderType.DOCUMENTS, collectionUri, QueryStage.CURSOR_ITERATION, e)
+                    return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+                }
+            }
+        } catch (e: SecurityException) {
+            logProviderDebug(ProviderType.DOCUMENTS, MediaStore.Files.getContentUri("external"), QueryStage.PERMISSION_CHECK, e)
+            return ProviderQueryResult.PermissionRequired
+        } catch (e: Exception) {
+            logProviderDebug(ProviderType.DOCUMENTS, MediaStore.Files.getContentUri("external"), QueryStage.MAP_RESULTS, e)
+            return ProviderQueryResult.ProviderFailure(e.javaClass.simpleName, e.message)
+        }
+
+        return if (results.isEmpty()) ProviderQueryResult.NoResults else ProviderQueryResult.Success(results)
+    }
+
+    fun searchBroadStorageFiles(context: Context, query: String, limit: Int = 10): List<FileSearchResult> {
+        return searchBroadStorageFilesResult(context, query, limit).getOrEmpty()
+    }
+
+    fun deduplicateDocumentsAndFiles(
+        safDocs: List<DocumentSearchResult>,
+        broadFiles: List<FileSearchResult>
+    ): List<DocumentSearchResult> {
+        val seenNameSize = mutableSetOf<String>()
+        val seenUris = mutableSetOf<String>()
+        val result = mutableListOf<DocumentSearchResult>()
+
+        for (doc in safDocs) {
+            val nameSizeKey = "${doc.displayName.lowercase().trim()}_${doc.sizeBytes}"
+            val uriKey = doc.uri.toString().lowercase()
+            seenNameSize.add(nameSizeKey)
+            seenUris.add(uriKey)
+            result.add(doc)
+        }
+
+        for (file in broadFiles) {
+            val nameSizeKey = "${file.displayName.lowercase().trim()}_${file.sizeBytes}"
+            val uriKey = file.uri.toString().lowercase()
+
+            if (nameSizeKey !in seenNameSize && uriKey !in seenUris) {
+                seenNameSize.add(nameSizeKey)
+                seenUris.add(uriKey)
+                result.add(
+                    DocumentSearchResult(
+                        id = file.id,
+                        folderId = -1L,
+                        displayName = file.displayName,
+                        uri = file.uri,
+                        mimeType = file.mimeType ?: "application/octet-stream",
+                        sizeBytes = file.sizeBytes,
+                        lastModified = 0L
+                    )
+                )
+            }
+        }
+
+        return result
+    }
+
+    suspend fun searchFiles(context: Context, query: String, limit: Int = 10): List<FileSearchResult> {
+        return if (hasBroadFileAccess(context)) {
+            searchBroadStorageFiles(context, query, limit)
+        } else {
+            val media = searchMedia(context, query, limit)
+            media.map {
+                FileSearchResult(
+                    id = it.id,
+                    displayName = it.displayName,
+                    path = it.uri.toString(),
+                    sizeBytes = it.sizeBytes,
+                    uri = it.uri,
+                    mimeType = it.mimeType
+                )
+            }
         }
     }
 

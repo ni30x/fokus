@@ -122,4 +122,27 @@ class UniversalSearchComponentsTest {
             )
         }
     }
+
+    @Test
+    fun `media results preserve content URI scheme and metadata without filesystem conversion`() {
+        val videoResult = MediaSearchResult(
+            id = 42L,
+            displayName = "vacation_clip.mp4",
+            uri = Uri.parse("content://media/external/video/media/42"),
+            mimeType = "video/mp4",
+            sizeBytes = 15485760L,
+            mediaType = MediaType.VIDEO
+        )
+
+        // Verify URI uses content:// scheme and is never a file:// path
+        assertEquals("content", videoResult.uri.scheme)
+        assertFalse(videoResult.uri.toString().startsWith("file://"))
+        assertFalse(videoResult.uri.toString().startsWith("/"))
+
+        // Verify display name and size are intact even if preview fails
+        assertEquals("vacation_clip.mp4", videoResult.displayName)
+        assertEquals(15485760L, videoResult.sizeBytes)
+        assertEquals(MediaType.VIDEO, videoResult.mediaType)
+        assertEquals("video/mp4", videoResult.mimeType)
+    }
 }

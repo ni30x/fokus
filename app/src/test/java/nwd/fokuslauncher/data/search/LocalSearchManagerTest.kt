@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.database.MatrixCursor
 import android.net.Uri
+import android.os.Environment
 import android.provider.CalendarContract
 import android.provider.CallLog
 import android.provider.ContactsContract
@@ -337,6 +338,125 @@ class LocalSearchManagerTest {
         val items = (result as ProviderQueryResult.Success<MediaSearchResult>).data
         assertEquals(1, items.size)
         assertEquals("image_test.png", items[0].displayName)
+    }
+
+    @Test
+    fun `getMediaPermissionState returns FULL when all media permissions are granted`() {
+        every { ContextCompat.checkSelfPermission(context, any()) } returns PackageManager.PERMISSION_GRANTED
+        val state = LocalSearchManager.getMediaPermissionState(context)
+        assertEquals(MediaPermissionState.FULL, state)
+    }
+
+    @Test
+    fun `getMediaPermissionState returns PARTIAL when only visual user selected is granted`() {
+        every { ContextCompat.checkSelfPermission(context, any()) } answers {
+            val perm = invocation.args[1] as String
+            if (perm == Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) {
+                PackageManager.PERMISSION_GRANTED
+            } else {
+                PackageManager.PERMISSION_DENIED
+            }
+        }
+        val state = LocalSearchManager.getMediaPermissionState(context)
+        assertEquals(MediaPermissionState.PARTIAL, state)
+    }
+
+    @Test
+    fun `getMediaPermissionState returns DENIED when user explicitly denied permission`() {
+        every { ContextCompat.checkSelfPermission(context, any()) } returns PackageManager.PERMISSION_DENIED
+        val state = LocalSearchManager.getMediaPermissionState(context, isPermissionDeniedByUser = true)
+        assertEquals(MediaPermissionState.DENIED, state)
+    }
+
+    @Test
+    fun `getMediaPermissionState returns REQUIRED when permissions are not granted and not yet denied`() {
+        every { ContextCompat.checkSelfPermission(context, any()) } returns PackageManager.PERMISSION_DENIED
+        val state = LocalSearchManager.getMediaPermissionState(context, isPermissionDeniedByUser = false)
+        assertEquals(MediaPermissionState.REQUIRED, state)
+    }
+
+    @Test
+    fun `hasBroadFileAccess checks Environment or storage permission`() {
+        mockkStatic(Environment::class)
+        try {
+            every { Environment.isExternalStorageManager() } returns true
+            val hasAccess = LocalSearchManager.hasBroadFileAccess(context)
+            assertTrue(hasAccess)
+        } finally {
+            unmockkStatic(Environment::class)
+        }
+    }
+
+    @Test
+    fun `createBroadFileAccessIntent creates non-null intent targeting package`() {
+        every { context.packageName } returns "nwd.fokuslauncher"
+        val intent = LocalSearchManager.createBroadFileAccessIntent(context)
+        assertNotNull(intent)
+        assertTrue(intent.flags and android.content.Intent.FLAG_ACTIVITY_NEW_TASK != 0)
+    }
+
+    @Test
+    fun `searchBroadStorageFilesResult returns PermissionRequired when broad access is denied`() {
+        mockkStatic(Environment::class)
+        try {
+            every { Environment.isExternalStorageManager() } returns false
+            every { ContextCompat.checkSelfPermission(context, any()) } returns PackageManager.PERMISSION_DENIED
+            val result = LocalSearchManager.searchBroadStorageFilesResult(context, "report")
+            assertEquals(ProviderQueryResult.PermissionRequired, result)
+        } finally {
+            unmockkStatic(Environment::class)
+        }
+    }
+
+    @Test
+    fun `deduplicateDocumentsAndFiles properly deduplicates matching items by URI or name and size`() {
+        val safDocs = listOf(
+            DocumentSearchResult(
+                id = 1L,
+                folderId = 10L,
+                displayName = "Annual_Report.pdf",
+                uri = Uri.parse("content://saf/doc/1"),
+                mimeType = "application/pdf",
+                sizeBytes = 2048L,
+                lastModified = 1000L
+            ),
+            DocumentSearchResult(
+                id = 2L,
+                folderId = 10L,
+                displayName = "Notes.txt",
+                uri = Uri.parse("content://saf/doc/2"),
+                mimeType = "text/plain",
+                sizeBytes = 512L,
+                lastModified = 2000L
+            )
+        )
+
+        val broadFiles = listOf(
+            // Duplicate of safDocs[0] with same name and size
+            FileSearchResult(
+                id = 101L,
+                displayName = "annual_report.pdf",
+                path = "/storage/emulated/0/Documents/Annual_Report.pdf",
+                sizeBytes = 2048L,
+                uri = Uri.parse("content://media/external/file/101"),
+                mimeType = "application/pdf"
+            ),
+            // Distinct file
+            FileSearchResult(
+                id = 102L,
+                displayName = "Budget.xlsx",
+                path = "/storage/emulated/0/Documents/Budget.xlsx",
+                sizeBytes = 8192L,
+                uri = Uri.parse("content://media/external/file/102"),
+                mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        )
+
+        val deduplicated = LocalSearchManager.deduplicateDocumentsAndFiles(safDocs, broadFiles)
+        assertEquals(3, deduplicated.size)
+        assertEquals("Annual_Report.pdf", deduplicated[0].displayName)
+        assertEquals("Notes.txt", deduplicated[1].displayName)
+        assertEquals("Budget.xlsx", deduplicated[2].displayName)
     }
 }
 

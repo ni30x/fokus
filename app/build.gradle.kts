@@ -182,7 +182,10 @@ android {
         }
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     // Keep symbols in this native lib to avoid environment-dependent stripping output.
     packaging {

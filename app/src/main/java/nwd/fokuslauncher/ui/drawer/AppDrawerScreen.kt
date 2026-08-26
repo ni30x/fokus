@@ -22,6 +22,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.border
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
@@ -34,10 +35,13 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import kotlin.math.abs
+import kotlin.math.exp
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -107,7 +111,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import nwd.fokuslauncher.data.search.LocalSearchManager
+import nwd.fokuslauncher.data.search.MediaPermissionState
 import nwd.fokuslauncher.R
 import nwd.fokuslauncher.data.model.AppInfo
 import nwd.fokuslauncher.data.model.DrawerAppSortMode
@@ -442,7 +449,6 @@ private fun DrawerAppListColumn(
         onAppClick: (LaunchTarget) -> Unit,
         onAppLongPress: (AppInfo) -> Unit,
         allowCustomDragReorder: Boolean,
-        activeLetter: String?,
         onReorderProfileSection: (sectionId: String, fromIndex: Int, toIndex: Int) -> Unit,
         onReorderPrivateApps: (fromIndex: Int, toIndex: Int) -> Unit,
         onAddSearchFolder: (Uri) -> Unit = {},
@@ -502,6 +508,11 @@ private fun DrawerAppListColumn(
     val drawerContext = LocalContext.current
     var permissionCheckTrigger by remember { mutableIntStateOf(0) }
     var mediaPermissionDenied by remember { mutableStateOf(false) }
+
+    LifecycleResumeEffect(Unit) {
+        permissionCheckTrigger++
+        onPauseOrDispose {}
+    }
     
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -516,22 +527,7 @@ private fun DrawerAppListColumn(
     }
 
     val permissionsToRequest = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            arrayOf(
-                Manifest.permission.READ_MEDIA_IMAGES,
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.READ_MEDIA_AUDIO,
-                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-            )
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(
-                Manifest.permission.READ_MEDIA_IMAGES,
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.READ_MEDIA_AUDIO
-            )
-        } else {
-            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
+        LocalSearchManager.getRequiredMediaPermissions().toTypedArray()
     }
 
     val openDocumentTreeLauncher = rememberLauncherForActivityResult(
@@ -544,10 +540,25 @@ private fun DrawerAppListColumn(
 
     var showManageFoldersSheet by remember { mutableStateOf(false) }
 
+    val hasBroadFileAccess = remember(permissionCheckTrigger) {
+        LocalSearchManager.hasBroadFileAccess(drawerContext)
+    }
+
+    val requestBroadFileAccess: () -> Unit = {
+        try {
+            val intent = LocalSearchManager.createBroadFileAccessIntent(drawerContext)
+            drawerContext.startActivity(intent)
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(drawerContext, "Cannot open file access settings", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     if (showManageFoldersSheet) {
         ManageIndexedFoldersBottomSheet(
             folders = uiState.indexedFolders,
             isIndexing = uiState.isIndexingDocuments,
+            hasBroadFileAccess = hasBroadFileAccess,
+            onRequestBroadFileAccess = requestBroadFileAccess,
             onDismiss = { showManageFoldersSheet = false },
             onAddFolder = { openDocumentTreeLauncher.launch(null) },
             onRemoveFolder = onRemoveSearchFolder,
@@ -556,45 +567,10 @@ private fun DrawerAppListColumn(
     }
 
     val mediaPermissionStatus = remember(permissionCheckTrigger, uiState.searchQuery, mediaPermissionDenied) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val hasImages = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-            val hasVideo = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
-            val hasUserSelected = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
-            val hasAudio = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
-
-            if (hasImages && hasVideo && hasAudio) {
-                MediaPermissionStatus.GRANTED
-            } else if (hasUserSelected && !hasImages) {
-                MediaPermissionStatus.PARTIAL
-            } else if (hasImages || hasVideo || hasAudio) {
-                MediaPermissionStatus.GRANTED
-            } else if (mediaPermissionDenied) {
-                MediaPermissionStatus.DENIED
-            } else {
-                MediaPermissionStatus.REQUIRED
-            }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val hasImages = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-            val hasVideo = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
-            val hasAudio = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
-
-            if (hasImages || hasVideo || hasAudio) {
-                MediaPermissionStatus.GRANTED
-            } else if (mediaPermissionDenied) {
-                MediaPermissionStatus.DENIED
-            } else {
-                MediaPermissionStatus.REQUIRED
-            }
-        } else {
-            val hasStorage = ContextCompat.checkSelfPermission(drawerContext, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-            if (hasStorage) {
-                MediaPermissionStatus.GRANTED
-            } else if (mediaPermissionDenied) {
-                MediaPermissionStatus.DENIED
-            } else {
-                MediaPermissionStatus.REQUIRED
-            }
-        }
+        LocalSearchManager.getMediaPermissionState(
+            context = drawerContext,
+            isPermissionDeniedByUser = mediaPermissionDenied
+        )
     }
 
     val hasAnyAppMatches = displayProfileSections.any { it.apps.isNotEmpty() } || (uiState.isPrivateSpaceUnlocked && displayPrivateApps.isNotEmpty())
@@ -660,13 +636,6 @@ private fun DrawerAppListColumn(
                             } else {
                                 0f
                             }
-                    val isFadedOut = activeLetter != null && if (activeLetter == "#") {
-                        val first = app.label.firstOrNull()
-                        first != null && first.isLetter()
-                    } else {
-                        !app.label.startsWith(activeLetter, ignoreCase = true)
-                    }
-                    val rowAlpha = if (isFadedOut) 0.3f else 1f
 
                     val dragHandleModifier = if (allowCustomDragReorder) {
                         Modifier.pointerInput(
@@ -724,7 +693,7 @@ private fun DrawerAppListColumn(
                             allowCustomDragReorder = allowCustomDragReorder,
                             isDraggedRow = isDraggedRow,
                             offsetY = offsetY,
-                            rowAlpha = rowAlpha,
+                            rowAlpha = 1f,
                             dragHandleModifier = dragHandleModifier,
                             onLaunchWhenNotReordering = {
                                 onAppClick(launchTargetFromAppInfo(app))
@@ -764,13 +733,6 @@ private fun DrawerAppListColumn(
                         } else {
                             0f
                         }
-                val isFadedOut = activeLetter != null && if (activeLetter == "#") {
-                    val first = app.label.firstOrNull()
-                    first != null && first.isLetter()
-                } else {
-                    !app.label.startsWith(activeLetter, ignoreCase = true)
-                }
-                val rowAlpha = if (isFadedOut) 0.3f else 1f
 
                 val dragHandleModifier = if (allowCustomDragReorder) {
                     Modifier.pointerInput(
@@ -819,7 +781,7 @@ private fun DrawerAppListColumn(
                         allowCustomDragReorder = allowCustomDragReorder,
                         isDraggedRow = isDraggedRow,
                         offsetY = offsetY,
-                        rowAlpha = rowAlpha,
+                        rowAlpha = 1f,
                         dragHandleModifier = dragHandleModifier,
                         onLaunchWhenNotReordering = {
                             val componentName = app.componentName
@@ -857,11 +819,13 @@ private fun DrawerAppListColumn(
                 totalIndexedDocuments = uiState.totalIndexedDocuments,
                 isIndexingDocuments = uiState.isIndexingDocuments,
                 mediaPermissionStatus = mediaPermissionStatus,
+                hasBroadFileAccess = hasBroadFileAccess,
                 hasAnyMatches = hasAnyMatches,
                 searchQuery = uiState.searchQuery,
                 onRequestMediaPermission = {
                     permissionLauncher.launch(permissionsToRequest)
                 },
+                onRequestBroadFileAccess = requestBroadFileAccess,
                 onOpenAppSettings = {
                     try {
                         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -887,7 +851,7 @@ private fun DrawerAppListColumn(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ColumnScope.DrawerAppListBody(
+private fun DrawerAppListBody(
         listState: LazyListState,
         categorySwipeModifier: Modifier,
         uiState: AppDrawerUiState,
@@ -897,18 +861,18 @@ private fun ColumnScope.DrawerAppListBody(
         onAppClick: (LaunchTarget) -> Unit,
         onAppLongPress: (AppInfo) -> Unit,
         allowCustomDragReorder: Boolean,
-        activeLetter: String?,
         onReorderDrawerProfileSection: (sectionId: String, fromIndex: Int, toIndex: Int) -> Unit,
         onReorderPrivateDrawerApps: (fromIndex: Int, toIndex: Int) -> Unit,
         onAddSearchFolder: (Uri) -> Unit = {},
         onRemoveSearchFolder: (Long, String) -> Unit = { _, _ -> },
-        onReindexSearchFolders: () -> Unit = {}
+        onReindexSearchFolders: () -> Unit = {},
+        modifier: Modifier = Modifier,
 ) {
     DrawerAppListColumn(
             listState = listState,
             modifier =
-                    Modifier.weight(1f)
-                            .fillMaxWidth()
+                    modifier
+                            .fillMaxSize()
                             .then(categorySwipeModifier)
                             .testTag("app_list"),
             uiState = uiState,
@@ -918,7 +882,6 @@ private fun ColumnScope.DrawerAppListBody(
             onAppClick = onAppClick,
             onAppLongPress = onAppLongPress,
             allowCustomDragReorder = allowCustomDragReorder,
-            activeLetter = activeLetter,
             onReorderProfileSection = onReorderDrawerProfileSection,
             onReorderPrivateApps = onReorderPrivateDrawerApps,
             onAddSearchFolder = onAddSearchFolder,
@@ -1141,88 +1104,74 @@ fun AppDrawerContent(
                     searchFilterBlank
 
     val scope = rememberCoroutineScope()
-    var activeLetter by remember { mutableStateOf<String?>(null) }
-    var isHoldingIndex by remember { mutableStateOf(false) }
-    var activeLetterJob by remember { mutableStateOf<Job?>(null) }
     val dynamicAlphabet = remember {
         listOf("#", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z")
     }
     val hideCharacterScroll = !uiState.drawerShowScrollbar
 
-    val selectLetter: (String, Boolean) -> Unit = { letter, isDrag ->
-        val isSameLetter = (letter == activeLetter)
-        if (!isSameLetter) {
-            activeLetter = letter
-            
-            var currentIndex = 0
-            var targetIndex = -1
-            
-            // Count Target Chips
-            if (uiState.searchQuery.isNotBlank()) {
+    val letterIndexMap = remember(
+            uiState.filteredProfileSections,
+            uiState.filteredPrivateSpaceApps,
+            uiState.searchQuery,
+            uiState.quickActionResult,
+            uiState.isPrivateSpaceUnlocked,
+            showProfileSections,
+            anyProfileAppsVisible
+    ) {
+        val map = mutableMapOf<String, Int>()
+        var currentIndex = 0
+        if (uiState.searchQuery.isNotBlank()) {
+            currentIndex++
+            if (uiState.quickActionResult != null) {
                 currentIndex++
-                if (uiState.quickActionResult != null) {
+            }
+        }
+        if (showProfileSections) {
+            var hasEmittedProfileListContent = false
+            for (section in uiState.filteredProfileSections) {
+                if (section.apps.isEmpty()) continue
+                val showSectionLabel = section.id != "owner"
+                if (showSectionLabel) {
+                    if (hasEmittedProfileListContent) currentIndex++
+                    currentIndex++
+                }
+                hasEmittedProfileListContent = true
+                for (app in section.apps) {
+                    val firstChar = app.label.firstOrNull()?.uppercaseChar()?.toString()
+                    val key = if (firstChar != null && firstChar.first().isLetter()) firstChar else "#"
+                    if (!map.containsKey(key)) {
+                        map[key] = currentIndex
+                    }
                     currentIndex++
                 }
             }
-            
-            if (showProfileSections) {
-                var hasEmittedProfileListContent = false
-                for (section in uiState.filteredProfileSections) {
-                    if (section.apps.isEmpty()) continue
-                    val showSectionLabel = section.id != "owner"
-                    if (showSectionLabel) {
-                        if (hasEmittedProfileListContent) currentIndex++
-                        currentIndex++
-                    }
-                    hasEmittedProfileListContent = true
-                    for (app in section.apps) {
-                        val appName = app.label
-                        val startsWithLetter = if (letter == "#") {
-                            val first = appName.firstOrNull()
-                            first == null || !first.isLetter()
-                        } else {
-                            appName.startsWith(letter, ignoreCase = true)
-                        }
-                        if (targetIndex == -1 && startsWithLetter) {
-                            targetIndex = currentIndex
-                        }
-                        currentIndex++
-                    }
-                }
+        }
+        if (uiState.isPrivateSpaceUnlocked && uiState.filteredPrivateSpaceApps.isNotEmpty()) {
+            if (showProfileSections && anyProfileAppsVisible) {
+                currentIndex++
             }
-            if (uiState.isPrivateSpaceUnlocked && uiState.filteredPrivateSpaceApps.isNotEmpty()) {
-                if (showProfileSections && anyProfileAppsVisible) {
-                    currentIndex++
+            currentIndex++
+            for (app in uiState.filteredPrivateSpaceApps) {
+                val firstChar = app.label.firstOrNull()?.uppercaseChar()?.toString()
+                val key = if (firstChar != null && firstChar.first().isLetter()) firstChar else "#"
+                if (!map.containsKey(key)) {
+                    map[key] = currentIndex
                 }
                 currentIndex++
-                for (app in uiState.filteredPrivateSpaceApps) {
-                    val appName = app.label
-                    val startsWithLetter = if (letter == "#") {
-                        val first = appName.firstOrNull()
-                        first == null || !first.isLetter()
-                    } else {
-                        appName.startsWith(letter, ignoreCase = true)
-                    }
-                    if (targetIndex == -1 && startsWithLetter) {
-                        targetIndex = currentIndex
-                    }
-                    currentIndex++
-                }
             }
+        }
+        map
+    }
+
+    val onLetterSelected = remember(letterIndexMap, scope, listState) {
+        { letter: String, _: Boolean ->
+            val targetIndex = letterIndexMap[letter] ?: -1
             if (targetIndex != -1) {
                 scope.launch { listState.scrollToItem(targetIndex) }
             }
-        }
-        
-        if (!isDrag) {
-            activeLetterJob?.cancel()
-            activeLetterJob = scope.launch {
-                delay(500)
-                activeLetter = null
-            }
+            Unit
         }
     }
-    val holdingScaleMultiplier = if (isHoldingIndex) 1.5f else 1.0f
 
     BackHandler { closeWithFocusReset() }
 
@@ -1234,7 +1183,7 @@ fun AppDrawerContent(
     var wasAtTop by remember { mutableStateOf(true) }
     // True only after the user drags the list. Layout/IME/filter relayout can briefly report
     // !isAtTop (e.g. backspacing the last search character) — that must not dismiss the keyboard.
-    var userDraggedList by remember { mutableStateOf(false) }
+    val userDraggedListRef = remember { booleanArrayOf(false) }
 
     // Sidebar icon search: focus when opened (independent of list scroll position).
     LaunchedEffect(showSearch, useSidebarCategoryDrawer) {
@@ -1248,12 +1197,12 @@ fun AppDrawerContent(
     // Sidebar: hide empty search only on scroll-away (not when reopening while already scrolled).
     LaunchedEffect(isAtTop, useSidebarCategoryDrawer, uiState.drawerScrollToTopAutoKeyboard) {
         if (isAtTop) {
-            userDraggedList = false
+            userDraggedListRef[0] = false
         }
         if (useSidebarCategoryDrawer) {
             if (!isAtTop) {
                 hasScrolledDown = true
-                if (wasAtTop && showSearch && uiState.searchQuery.isBlank() && userDraggedList) {
+                if (wasAtTop && showSearch && uiState.searchQuery.isBlank() && userDraggedListRef[0]) {
                     keyboardController?.hide()
                     focusManager.clearFocus(force = true)
                     showSearch = false
@@ -1271,41 +1220,41 @@ fun AppDrawerContent(
         }
     }
 
-    var overscrollY by remember { mutableFloatStateOf(0f) }
     val latestUseSidebar = rememberUpdatedState(useSidebarCategoryDrawer)
     val latestShowSearch = rememberUpdatedState(showSearch)
     val latestScrollToTopAutoKeyboard =
             rememberUpdatedState(uiState.drawerScrollToTopAutoKeyboard)
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
+            private var overscrollAccumulator = 0f
+            private var keyboardDismissedOnCurrentDrag = false
+
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source == NestedScrollSource.UserInput && available.y < 0) {
-                    // Finger scrolling the list away from the top.
-                    userDraggedList = true
-                    // Dismiss keyboard as soon as the user scrolls down while search is open
-                    // (chip mode always; sidebar only when the search field is shown).
+                    userDraggedListRef[0] = true
                     val searchOpen = !latestUseSidebar.value || latestShowSearch.value
-                    if (searchOpen) {
+                    if (searchOpen && !keyboardDismissedOnCurrentDrag) {
+                        keyboardDismissedOnCurrentDrag = true
                         keyboardController?.hide()
                         focusManager.clearFocus(force = true)
                     }
+                } else if (source != NestedScrollSource.UserInput) {
+                    keyboardDismissedOnCurrentDrag = false
                 }
+
                 if (source == NestedScrollSource.UserInput && available.y > 0 && !listState.canScrollBackward) {
-                    // Immediate response for pull-down gesture at the boundary
                     if (latestScrollToTopAutoKeyboard.value && !latestUseSidebar.value) {
-                        // LaunchedEffect(isAtTop) handles focus when scrolling to top; re-request
-                        // if already at top and pulling down at the list boundary.
                         focusRequester.requestFocus()
                         keyboardController?.show()
                     }
-                    overscrollY += available.y
-                    if (overscrollY > 300f) {
-                        overscrollY = 0f
+                    overscrollAccumulator += available.y
+                    if (overscrollAccumulator > 300f) {
+                        overscrollAccumulator = 0f
                         closeWithFocusReset()
                         return available
                     }
                 } else {
-                    overscrollY = 0f
+                    overscrollAccumulator = 0f
                 }
                 return Offset.Zero
             }
@@ -1338,7 +1287,9 @@ fun AppDrawerContent(
                             onDragStart = { accumulated = 0f },
                             onHorizontalDrag = { change, dragAmount ->
                                 accumulated += dragAmount
-                                change.consume()
+                                if (kotlin.math.abs(accumulated) > 15f) {
+                                    change.consume()
+                                }
                             },
                             onDragEnd = {
                                 val categories = latestCategories.value
@@ -1375,24 +1326,37 @@ fun AppDrawerContent(
                 onToggleReorderApps = onToggleDrawerReorderApps,
         )
     }
-    val drawerAppList: @Composable ColumnScope.() -> Unit = {
-        DrawerAppListBody(
-                listState = listState,
-                categorySwipeModifier = categorySwipeModifier,
-                uiState = uiState,
-                showProfileSections = showProfileSections,
-                anyProfileAppsVisible = anyProfileAppsVisible,
-                focusManager = focusManager,
-                onAppClick = onAppClick,
-                onAppLongPress = onAppLongPress,
-                allowCustomDragReorder = allowCustomDragReorder,
-                activeLetter = activeLetter,
-                onReorderDrawerProfileSection = onReorderDrawerProfileSection,
-                onReorderPrivateDrawerApps = onReorderPrivateDrawerApps,
-                onAddSearchFolder = onAddSearchFolder,
-                onRemoveSearchFolder = onRemoveSearchFolder,
-                onReindexSearchFolders = onReindexSearchFolders,
-        )
+    val bodyViewport: @Composable ColumnScope.() -> Unit = {
+        Box(
+                modifier =
+                        Modifier.fillMaxWidth()
+                                .weight(1f)
+        ) {
+            DrawerAppListBody(
+                    listState = listState,
+                    categorySwipeModifier = categorySwipeModifier,
+                    uiState = uiState,
+                    showProfileSections = showProfileSections,
+                    anyProfileAppsVisible = anyProfileAppsVisible,
+                    focusManager = focusManager,
+                    onAppClick = onAppClick,
+                    onAppLongPress = onAppLongPress,
+                    allowCustomDragReorder = allowCustomDragReorder,
+                    onReorderDrawerProfileSection = onReorderDrawerProfileSection,
+                    onReorderPrivateDrawerApps = onReorderPrivateDrawerApps,
+                    onAddSearchFolder = onAddSearchFolder,
+                    onRemoveSearchFolder = onRemoveSearchFolder,
+                    onReindexSearchFolders = onReindexSearchFolders,
+                    modifier = Modifier.fillMaxSize()
+            )
+            if (!hideCharacterScroll && uiState.searchQuery.isEmpty()) {
+                DrawerAlphabetIndex(
+                        dynamicAlphabet = dynamicAlphabet,
+                        onLetterSelected = onLetterSelected,
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                )
+            }
+        }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -1482,7 +1446,7 @@ fun AppDrawerContent(
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
-                            drawerAppList()
+                            bodyViewport()
                         }
                     }
                     if (drawerCategorySidebarOnRight) {
@@ -1524,177 +1488,273 @@ fun AppDrawerContent(
                                                 .testTag("category_chips")
                         )
                     }
-                    drawerAppList()
-                }
-            }
-        }
-        
-        // Curved A-Z sidebar index on the right with floating letter preview indicator
-        var indexHeight by remember { mutableFloatStateOf(0f) }
-        val activeIdx = activeLetter?.let { dynamicAlphabet.indexOf(it) } ?: -1
-        if (!hideCharacterScroll && uiState.searchQuery.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(top = 116.dp, bottom = 16.dp)
-                    .fillMaxHeight()
-            ) {
-                // Floating preview badge shown when dragging / holding index
-                if (isHoldingIndex && activeLetter != null) {
-                    val badgeYRatio = if (dynamicAlphabet.size > 1 && activeIdx >= 0) {
-                        activeIdx.toFloat() / (dynamicAlphabet.size - 1)
-                    } else 0.5f
-
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(end = 80.dp)
-                            .graphicsLayer {
-                                translationY = badgeYRatio * indexHeight - 24.dp.toPx()
-                            }
-                            .background(
-                                color = Color(0xFF222222),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .border(
-                                width = 1.dp,
-                                color = Color.White.copy(alpha = 0.3f),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = activeLetter ?: "",
-                            color = Color.White,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(64.dp)
-                        .onSizeChanged { size ->
-                            indexHeight = size.height.toFloat()
-                        }
-                        .pointerInput(dynamicAlphabet) {
-                            detectDragGestures(
-                                onDragStart = { offset ->
-                                    isHoldingIndex = true
-                                    if (indexHeight > 0) {
-                                        val percentage = (offset.y / indexHeight).coerceIn(0f, 1f)
-                                        val targetIdx = (percentage * (dynamicAlphabet.size - 1)).toInt()
-                                        dynamicAlphabet.getOrNull(targetIdx)?.let { letter ->
-                                            selectLetter(letter, true)
-                                        }
-                                    }
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    if (indexHeight > 0) {
-                                        val percentage = (change.position.y / indexHeight).coerceIn(0f, 1f)
-                                        val targetIdx = (percentage * (dynamicAlphabet.size - 1)).toInt()
-                                        dynamicAlphabet.getOrNull(targetIdx)?.let { letter ->
-                                            selectLetter(letter, true)
-                                        }
-                                    }
-                                },
-                                onDragEnd = {
-                                    isHoldingIndex = false
-                                    activeLetterJob?.cancel()
-                                    activeLetter = null
-                                },
-                                onDragCancel = {
-                                    isHoldingIndex = false
-                                    activeLetterJob?.cancel()
-                                    activeLetter = null
-                                }
-                            )
-                        }
-                        .pointerInput(dynamicAlphabet) {
-                            detectTapGestures(
-                                onPress = { offset ->
-                                    isHoldingIndex = true
-                                    if (indexHeight > 0) {
-                                        val percentage = (offset.y / indexHeight).coerceIn(0f, 1f)
-                                        val targetIdx = (percentage * (dynamicAlphabet.size - 1)).toInt()
-                                        dynamicAlphabet.getOrNull(targetIdx)?.let { letter ->
-                                            selectLetter(letter, false)
-                                        }
-                                    }
-                                    try {
-                                        awaitRelease()
-                                    } finally {
-                                        isHoldingIndex = false
-                                        activeLetterJob?.cancel()
-                                        activeLetter = null
-                                    }
-                                }
-                            )
-                        },
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    dynamicAlphabet.forEachIndexed { i, letter ->
-                        Text(
-                            text = letter,
-                            style = TextStyle(
-                                color = if (activeLetter == letter) Color.White else Color.LightGray,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (activeLetter == letter) FontWeight.Bold else FontWeight.Medium
-                            ),
-                            modifier = Modifier
-                                .graphicsLayer {
-                                    val activeIndex = activeIdx
-                                    val dist = if (activeIndex != -1) kotlin.math.abs(i - activeIndex).toFloat() else 0f
-                                    if (activeIndex != -1) {
-                                        val sigma = 3.2f
-                                        val factor = kotlin.math.exp(- (dist * dist) / (2f * sigma * sigma)).toFloat()
-
-                                        val tX = factor * -110f
-                                        val holdingBonus = if (i == activeIndex) (holdingScaleMultiplier - 1f) else 0f
-                                        val scale = 1.0f + (factor * 0.35f) + holdingBonus
-
-                                        val aVal = 0.4f + factor * 0.6f
-
-                                        val dispersionMaxDp = 20f
-                                        val dispersionFactor = (dist / 6f).coerceIn(0f, 1f) * kotlin.math.exp(- (dist * dist) / (2f * sigma * sigma)).toFloat()
-                                        val yOffsetDp = if (i < activeIndex) {
-                                            -dispersionFactor * dispersionMaxDp
-                                        } else if (i > activeIndex) {
-                                            dispersionFactor * dispersionMaxDp
-                                        } else {
-                                            0f
-                                        }
-
-                                        translationX = tX.dp.toPx()
-                                        translationY = yOffsetDp.dp.toPx()
-                                        scaleX = scale
-                                        scaleY = scale
-                                        alpha = aVal
-                                    } else {
-                                        translationX = 0f
-                                        translationY = 0f
-                                        scaleX = 1f
-                                        scaleY = 1f
-                                        alpha = 0.5f
-                                    }
-                                }
-                                .padding(vertical = 1.dp)
-                                .padding(start = 4.dp, end = 24.dp)
-                        )
-                    }
+                    bodyViewport()
                 }
             }
         }
     }
+}
+
+@Immutable
+private data class LetterVisualState(
+        val translationXDp: Float = 0f,
+        val translationYDp: Float = 0f,
+        val scale: Float = 1f,
+        val alpha: Float = 0.5f,
+        val isHighlighted: Boolean = false,
+)
+
+private val DEFAULT_LETTER_VISUAL_STATE = LetterVisualState()
+
+@Composable
+private fun BoxScope.DrawerAlphabetIndex(
+        dynamicAlphabet: List<String>,
+        onLetterSelected: (String, Boolean) -> Unit,
+        modifier: Modifier = Modifier,
+) {
+    var isHoldingIndex by remember { mutableStateOf(false) }
+    var activeLetter by remember { mutableStateOf<String?>(null) }
+    var activeLetterJob by remember { mutableStateOf<Job?>(null) }
+    var indexHeight by remember { mutableFloatStateOf(0f) }
+    val scope = rememberCoroutineScope()
+
+    val selectLetterInternal: (String, Boolean) -> Unit = { letter, isDrag ->
+        if (activeLetter != letter) {
+            activeLetter = letter
+            onLetterSelected(letter, isDrag)
+        }
+        if (!isDrag) {
+            activeLetterJob?.cancel()
+            activeLetterJob = scope.launch {
+                delay(500)
+                activeLetter = null
+            }
+        }
+    }
+
+    val activeIdx = activeLetter?.let { dynamicAlphabet.indexOf(it) } ?: -1
+    val holdingScaleMultiplier = if (isHoldingIndex) 1.5f else 1.0f
+
+    // Precalculate letter transforms once per activeLetter / isHoldingIndex change
+    // When idle (activeIdx == -1), no exponential math or allocations occur.
+    val letterVisualStates = remember(activeIdx, holdingScaleMultiplier, dynamicAlphabet.size) {
+        if (activeIdx == -1) {
+            null
+        } else {
+            val sigma = 3.2f
+            val twoSigmaSq = 2f * sigma * sigma
+            val dispersionMaxDp = 20f
+            Array(dynamicAlphabet.size) { i ->
+                val dist = abs(i - activeIdx).toFloat()
+                if (dist > 8f) {
+                    DEFAULT_LETTER_VISUAL_STATE
+                } else {
+                    val factor = exp(-(dist * dist) / twoSigmaSq)
+                    val tX = factor * -110f
+                    val holdingBonus = if (i == activeIdx) (holdingScaleMultiplier - 1f) else 0f
+                    val scale = 1.0f + (factor * 0.35f) + holdingBonus
+                    val aVal = 0.4f + factor * 0.6f
+                    val dispersionFactor = (dist / 6f).coerceIn(0f, 1f) * factor
+                    val yOffsetDp = when {
+                        i < activeIdx -> -dispersionFactor * dispersionMaxDp
+                        i > activeIdx -> dispersionFactor * dispersionMaxDp
+                        else -> 0f
+                    }
+                    LetterVisualState(
+                            translationXDp = tX,
+                            translationYDp = yOffsetDp,
+                            scale = scale,
+                            alpha = aVal,
+                            isHighlighted = (i == activeIdx)
+                    )
+                }
+            }
+        }
+    }
+
+    Box(
+            modifier = modifier.fillMaxHeight()
+    ) {
+        // Floating preview badge shown only when dragging / holding index
+        if (isHoldingIndex && activeLetter != null) {
+            val badgeYRatio =
+                    if (dynamicAlphabet.size > 1 && activeIdx >= 0) {
+                        activeIdx.toFloat() / (dynamicAlphabet.size - 1)
+                    } else 0.5f
+
+            Box(
+                    modifier =
+                            Modifier.align(Alignment.TopEnd)
+                                    .padding(end = 80.dp)
+                                    .graphicsLayer {
+                                        translationY = badgeYRatio * indexHeight - 24.dp.toPx()
+                                    }
+                                    .background(
+                                            color = Color(0xFF222222),
+                                            shape = RoundedCornerShape(12.dp),
+                                    )
+                                    .border(
+                                            width = 1.dp,
+                                            color = Color.White.copy(alpha = 0.3f),
+                                            shape = RoundedCornerShape(12.dp),
+                                    )
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                        text = activeLetter ?: "",
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                )
+            }
+        }
+
+        Column(
+                modifier =
+                        Modifier.fillMaxHeight()
+                                .width(64.dp)
+                                .onSizeChanged { size ->
+                                    indexHeight = size.height.toFloat()
+                                }
+                                .pointerInput(dynamicAlphabet) {
+                                    detectDragGestures(
+                                            onDragStart = { offset ->
+                                                isHoldingIndex = true
+                                                if (indexHeight > 0) {
+                                                    val percentage =
+                                                            (offset.y / indexHeight).coerceIn(
+                                                                    0f,
+                                                                    1f
+                                                            )
+                                                    val targetIdx =
+                                                            (percentage *
+                                                                            (dynamicAlphabet.size -
+                                                                                    1))
+                                                                    .toInt()
+                                                    dynamicAlphabet
+                                                            .getOrNull(targetIdx)
+                                                            ?.let { letter ->
+                                                                selectLetterInternal(letter, true)
+                                                            }
+                                                }
+                                            },
+                                            onDrag = { change, _ ->
+                                                change.consume()
+                                                if (indexHeight > 0) {
+                                                    val percentage =
+                                                            (change.position.y / indexHeight)
+                                                                    .coerceIn(0f, 1f)
+                                                    val targetIdx =
+                                                            (percentage *
+                                                                            (dynamicAlphabet.size -
+                                                                                    1))
+                                                                    .toInt()
+                                                    dynamicAlphabet
+                                                            .getOrNull(targetIdx)
+                                                            ?.let { letter ->
+                                                                selectLetterInternal(letter, true)
+                                                            }
+                                                }
+                                            },
+                                            onDragEnd = {
+                                                isHoldingIndex = false
+                                                activeLetterJob?.cancel()
+                                                activeLetter = null
+                                            },
+                                            onDragCancel = {
+                                                isHoldingIndex = false
+                                                activeLetterJob?.cancel()
+                                                activeLetter = null
+                                            },
+                                    )
+                                }
+                                .pointerInput(dynamicAlphabet) {
+                                    detectTapGestures(
+                                            onPress = { offset ->
+                                                isHoldingIndex = true
+                                                if (indexHeight > 0) {
+                                                    val percentage =
+                                                            (offset.y / indexHeight).coerceIn(
+                                                                    0f,
+                                                                    1f
+                                                            )
+                                                    val targetIdx =
+                                                            (percentage *
+                                                                            (dynamicAlphabet.size -
+                                                                                    1))
+                                                                    .toInt()
+                                                    dynamicAlphabet
+                                                            .getOrNull(targetIdx)
+                                                            ?.let { letter ->
+                                                                selectLetterInternal(letter, false)
+                                                            }
+                                                }
+                                                try {
+                                                    awaitRelease()
+                                                } finally {
+                                                    isHoldingIndex = false
+                                                    activeLetterJob?.cancel()
+                                                    activeLetter = null
+                                                }
+                                            }
+                                    )
+                                },
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            dynamicAlphabet.forEachIndexed { i, letter ->
+                val state = letterVisualStates?.getOrNull(i)
+                AlphabetLetterItem(
+                        letter = letter,
+                        visualState = state,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlphabetLetterItem(
+        letter: String,
+        visualState: LetterVisualState?,
+        modifier: Modifier = Modifier,
+) {
+    val isHighlighted = visualState?.isHighlighted == true
+    val graphicsModifier = if (visualState != null && visualState != DEFAULT_LETTER_VISUAL_STATE) {
+        Modifier.graphicsLayer {
+            translationX = visualState.translationXDp.dp.toPx()
+            translationY = visualState.translationYDp.dp.toPx()
+            scaleX = visualState.scale
+            scaleY = visualState.scale
+            alpha = visualState.alpha
+        }
+    } else {
+        Modifier.graphicsLayer {
+            alpha = 0.5f
+        }
+    }
+
+    Text(
+            text = letter,
+            style =
+                    TextStyle(
+                            color =
+                                    if (isHighlighted) Color.White
+                                    else Color.LightGray,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight =
+                                    if (isHighlighted) FontWeight.Bold
+                                    else FontWeight.Medium,
+                    ),
+            modifier =
+                    modifier
+                            .then(graphicsModifier)
+                            .padding(vertical = 1.dp)
+                            .padding(start = 4.dp, end = 24.dp),
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

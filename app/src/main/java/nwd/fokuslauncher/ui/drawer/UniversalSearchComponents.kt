@@ -34,6 +34,16 @@ import coil.request.ImageRequest
 import coil.request.videoFrameMillis
 import coil.size.Scale
 import coil.size.Size
+import android.graphics.Bitmap
+import android.os.Build
+import android.os.CancellationSignal
+import android.util.Log
+import android.util.Size as AndroidSize
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import nwd.fokuslauncher.BuildConfig
 import nwd.fokuslauncher.data.database.entity.IndexedFolderEntity
 import nwd.fokuslauncher.data.search.*
 import java.text.DateFormat
@@ -142,12 +152,7 @@ fun InLineQuickActionCard(
     }
 }
 
-enum class MediaPermissionStatus {
-    GRANTED,
-    PARTIAL,
-    REQUIRED,
-    DENIED
-}
+typealias MediaPermissionStatus = MediaPermissionState
 
 fun LazyListScope.universalSearchResults(
     context: Context,
@@ -162,10 +167,12 @@ fun LazyListScope.universalSearchResults(
     indexedFolders: List<IndexedFolderEntity> = emptyList(),
     totalIndexedDocuments: Int = 0,
     isIndexingDocuments: Boolean = false,
-    mediaPermissionStatus: MediaPermissionStatus = MediaPermissionStatus.GRANTED,
+    mediaPermissionStatus: MediaPermissionState = MediaPermissionState.FULL,
+    hasBroadFileAccess: Boolean = false,
     hasAnyMatches: Boolean = true,
     searchQuery: String = "",
     onRequestMediaPermission: () -> Unit = {},
+    onRequestBroadFileAccess: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
     onChooseFolder: () -> Unit = {},
     onOpenManageFolders: () -> Unit = {},
@@ -404,7 +411,7 @@ fun LazyListScope.universalSearchResults(
                 }
             }
         }
-        MediaPermissionStatus.GRANTED -> {
+        MediaPermissionState.FULL -> {
             if (mediaResults.isNotEmpty()) {
                 item(key = "hdr_media_results", contentType = "header") {
                     DrawerListSectionHeader(text = "Media")
@@ -421,17 +428,17 @@ fun LazyListScope.universalSearchResults(
         }
     }
 
-    // 3. Documents & Files (Storage Access Framework Index)
+    // 3. Documents & Files (Storage Access Framework Index & Broad File Access)
     item(key = "hdr_documents_results", contentType = "header") {
         DrawerListSectionHeader(text = "Documents & Files")
     }
 
-    if (indexedFolders.isEmpty()) {
+    if (!hasBroadFileAccess && indexedFolders.isEmpty()) {
         item(key = "choose_folders_cta", contentType = "choose_folders_cta") {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onChooseFolder() }
+                    .clickable { onOpenManageFolders() }
                     .padding(horizontal = 16.dp, vertical = 6.dp),
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
@@ -441,24 +448,27 @@ fun LazyListScope.universalSearchResults(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.CreateNewFolder,
-                        contentDescription = "Choose Folders",
+                        imageVector = Icons.Default.FolderSpecial,
+                        contentDescription = "Choose folders or enable access",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.width(16.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Choose folders/files for document search",
+                            text = "SAF folders & broad file search",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Select folders like Documents or Downloads to index documents locally",
+                            text = "Index SAF folders or enable broad file search access to search device documents",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                    TextButton(onClick = onOpenManageFolders) {
+                        Text("Setup", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
@@ -473,7 +483,12 @@ fun LazyListScope.universalSearchResults(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = if (isIndexingDocuments) "Indexing documents..." else "$totalIndexedDocuments documents indexed",
+                    text = when {
+                        isIndexingDocuments -> "Indexing documents..."
+                        hasBroadFileAccess && indexedFolders.isNotEmpty() -> "Broad file search & ${indexedFolders.size} SAF folders"
+                        hasBroadFileAccess -> "Broad file search access enabled"
+                        else -> "$totalIndexedDocuments documents indexed"
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -832,6 +847,8 @@ fun LazyListScope.universalSearchResults(
 fun ManageIndexedFoldersBottomSheet(
     folders: List<IndexedFolderEntity>,
     isIndexing: Boolean,
+    hasBroadFileAccess: Boolean = false,
+    onRequestBroadFileAccess: () -> Unit = {},
     onDismiss: () -> Unit,
     onAddFolder: () -> Unit,
     onRemoveFolder: (Long, String) -> Unit,
@@ -852,7 +869,7 @@ fun ManageIndexedFoldersBottomSheet(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Search Folders",
+                    text = "Search Folders & Access",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold
                 )
@@ -867,13 +884,78 @@ fun ManageIndexedFoldersBottomSheet(
 
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Documents inside these folders are indexed locally so you can search them instantly without background filesystem scans.",
+                text = "Configure SAF folders and broad file search access to locate files and documents across device storage.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Broad File Search Access Section
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onRequestBroadFileAccess() },
+                shape = RoundedCornerShape(12.dp),
+                color = if (hasBroadFileAccess) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (hasBroadFileAccess) Icons.Default.CheckCircle else Icons.Default.FolderSpecial,
+                        contentDescription = null,
+                        tint = if (hasBroadFileAccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (hasBroadFileAccess) "Broad file search access enabled" else "Enable broad file search access",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (hasBroadFileAccess) {
+                                "All non-restricted files across storage are searchable (excludes Android/data, Android/obb & app private sandboxes)"
+                            } else {
+                                "Allow all-files access to search non-restricted documents across device storage"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (!hasBroadFileAccess) {
+                        TextButton(onClick = onRequestBroadFileAccess) {
+                            Text("Enable", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "SAF folders",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Choose specific Storage Access Framework folders like Documents or Downloads to index for local offline search.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             if (isIndexing) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -883,17 +965,17 @@ fun ManageIndexedFoldersBottomSheet(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (folders.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 24.dp),
+                        .padding(vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No folders added yet",
+                        text = "No SAF folders added yet",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -996,19 +1078,46 @@ fun MediaResultRow(
             when (media.mediaType) {
                 MediaType.IMAGE, MediaType.VIDEO -> {
                     val isVideo = media.mediaType == MediaType.VIDEO
-                    val imageRequest = ImageRequest.Builder(LocalContext.current)
-                        .data(media.uri)
-                        .size(120, 120)
-                        .scale(Scale.FILL)
-                        .memoryCachePolicy(CachePolicy.ENABLED)
-                        .diskCachePolicy(CachePolicy.ENABLED)
-                        .crossfade(true)
-                        .apply {
-                            if (isVideo) {
-                                videoFrameMillis(1000)
+                    var loadedBitmap by remember(media.uri) { mutableStateOf<Bitmap?>(null) }
+                    var loadFailed by remember(media.uri) { mutableStateOf(false) }
+
+                    LaunchedEffect(media.uri) {
+                        loadedBitmap = null
+                        loadFailed = false
+                        withContext(Dispatchers.IO) {
+                            try {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    if (BuildConfig.DEBUG) {
+                                        Log.d("MediaThumbnail", "Loading thumbnail: type=${media.mediaType}, auth=${media.uri.authority}, path=${media.uri.path}, id=${media.uri.lastPathSegment}, mime=${media.mimeType}, strategy=ContentResolver.loadThumbnail")
+                                    }
+                                    val signal = CancellationSignal()
+                                    val bitmap = context.contentResolver.loadThumbnail(
+                                        media.uri,
+                                        AndroidSize(120, 120),
+                                        signal
+                                    )
+                                    withContext(Dispatchers.Main) {
+                                        loadedBitmap = bitmap
+                                    }
+                                } else {
+                                    if (BuildConfig.DEBUG) {
+                                        Log.d("MediaThumbnail", "Skipping loadThumbnail on API < 29: type=${media.mediaType}, auth=${media.uri.authority}, path=${media.uri.path}, id=${media.uri.lastPathSegment}, mime=${media.mimeType}, strategy=Coil fallback")
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        loadFailed = true
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                if (BuildConfig.DEBUG) {
+                                    Log.d("MediaThumbnail", "loadThumbnail failed, switching to Coil fallback: type=${media.mediaType}, auth=${media.uri.authority}, path=${media.uri.path}, id=${media.uri.lastPathSegment}, mime=${media.mimeType}, strategy=ContentResolver.loadThumbnail, exception=${e.javaClass.simpleName}: ${e.message}")
+                                }
+                                withContext(Dispatchers.Main) {
+                                    loadFailed = true
+                                }
                             }
                         }
-                        .build()
+                    }
+
                     val fallbackPainter = rememberVectorPainter(
                         if (isVideo) Icons.Default.VideoFile else Icons.Default.Image
                     )
@@ -1018,14 +1127,53 @@ fun MediaResultRow(
                             .clip(RoundedCornerShape(6.dp)),
                         contentAlignment = Alignment.Center
                     ) {
-                        AsyncImage(
-                            model = imageRequest,
-                            contentDescription = media.displayName,
-                            placeholder = fallbackPainter,
-                            error = fallbackPainter,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
+                        if (loadedBitmap != null) {
+                            Image(
+                                bitmap = loadedBitmap!!.asImageBitmap(),
+                                contentDescription = media.displayName,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else if (loadFailed) {
+                            // Secondary fallback path using Coil with content:// URI
+                            val imageRequest = ImageRequest.Builder(LocalContext.current)
+                                .data(media.uri)
+                                .size(120, 120)
+                                .scale(Scale.FILL)
+                                .memoryCachePolicy(CachePolicy.ENABLED)
+                                .diskCachePolicy(CachePolicy.ENABLED)
+                                .crossfade(true)
+                                .listener(
+                                    onError = { _, result ->
+                                        if (BuildConfig.DEBUG) {
+                                            Log.d("MediaThumbnail", "Coil fallback failed: type=${media.mediaType}, auth=${media.uri.authority}, path=${media.uri.path}, id=${media.uri.lastPathSegment}, mime=${media.mimeType}, strategy=Coil fallback, exception=${result.throwable.javaClass.simpleName}: ${result.throwable.message}")
+                                        }
+                                    }
+                                )
+                                .apply {
+                                    if (isVideo) {
+                                        videoFrameMillis(1000)
+                                    }
+                                }
+                                .build()
+
+                            AsyncImage(
+                                model = imageRequest,
+                                contentDescription = media.displayName,
+                                placeholder = fallbackPainter,
+                                error = fallbackPainter,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Image(
+                                painter = fallbackPainter,
+                                contentDescription = media.displayName,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+
                         if (isVideo) {
                             Icon(
                                 imageVector = Icons.Default.PlayCircleFilled,

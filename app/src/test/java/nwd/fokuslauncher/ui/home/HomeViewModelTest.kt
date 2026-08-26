@@ -771,19 +771,18 @@ class HomeViewModelTest {
 
     @Test
     fun `refreshInstalledApps prunes favorites missing from one profile only`() {
-        every { preferencesManager.favoritesFlow } returns flowOf(
-            listOf(
-                FavoriteApp(label = "Chrome", packageName = "com.lu4p.chrome", iconName = "circle", profileKey = "0"),
-                FavoriteApp(label = "Chrome Work", packageName = "com.lu4p.chrome", iconName = "circle", profileKey = "42")
-            )
+        val testFavs = listOf(
+            FavoriteApp(label = "Chrome", packageName = "com.lu4p.chrome", iconName = "circle", profileKey = "0"),
+            FavoriteApp(label = "Chrome Work", packageName = "com.lu4p.chrome", iconName = "circle", profileKey = "42")
         )
+        every { preferencesManager.favoritesFlow } returns flowOf(testFavs)
         every { appRepository.getInstalledApps() } returns
             listOf(AppInfo(packageName = "com.lu4p.chrome", label = "Chrome", icon = null))
-        every { appRepository.getLaunchableAppKeys(setOf("42")) } returns emptySet()
+        every { appRepository.getLaunchableAppKeys(setOf("com.lu4p.chrome#42")) } returns emptySet()
 
         val viewModel = createViewModel()
         val collectJob = CoroutineScope(testDispatcher).launch { viewModel.favorites.collect { } }
-        testDispatcher.scheduler.runCurrent()
+        testDispatcher.scheduler.advanceUntilIdle()
 
         viewModel.refreshInstalledApps()
         testDispatcher.scheduler.advanceUntilIdle()
