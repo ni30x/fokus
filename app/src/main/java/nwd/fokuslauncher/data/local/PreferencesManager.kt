@@ -168,6 +168,8 @@ class PreferencesManager @Inject constructor(@param:ApplicationContext private v
         private val HOME_ALIGNMENT_KEY = stringPreferencesKey("home_alignment")
         private val LAUNCHER_VISUAL_STYLE_KEY = stringPreferencesKey("launcher_visual_style")
         private val LAUNCHER_GLOW_ENABLED_KEY = booleanPreferencesKey("launcher_glow_enabled")
+        private val LAUNCHER_BLACK_TEXT_ENABLED_KEY =
+                booleanPreferencesKey("launcher_black_text_enabled")
         /**
          * True after the user keeps or sets an image wallpaper; false after setting black wallpaper
          * from the app. Default false so existing installs behave as before until they change
@@ -864,6 +866,13 @@ class PreferencesManager @Inject constructor(@param:ApplicationContext private v
 
     suspend fun setLauncherGlowEnabled(enabled: Boolean) {
         setPref(LAUNCHER_GLOW_ENABLED_KEY, enabled)
+    }
+
+    val blackTextEnabledFlow: Flow<Boolean> =
+            prefFlow(LAUNCHER_BLACK_TEXT_ENABLED_KEY, false)
+
+    suspend fun setBlackTextEnabled(enabled: Boolean) {
+        setPref(LAUNCHER_BLACK_TEXT_ENABLED_KEY, enabled)
     }
 
     suspend fun setHomeUsesPhotoWallpaper(usesPhoto: Boolean) {

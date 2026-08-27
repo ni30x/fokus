@@ -53,6 +53,14 @@ fun OutlinedText(
 
     val effectiveOutlineWidth =
             remember(outlineWidth) { outlineWidth }
+    val effectiveOutlineColor =
+            remember(color, outlineColor) {
+                if (color == Color.Black && outlineColor == Color.Black) {
+                    Color.White.copy(alpha = 0.85f)
+                } else {
+                    outlineColor
+                }
+            }
     Box(modifier = modifier) {
         Text(
                 text = text,
@@ -65,7 +73,7 @@ fun OutlinedText(
                                                 join = StrokeJoin.Round,
                                         )
                         ),
-                color = outlineColor,
+                color = effectiveOutlineColor,
                 maxLines = maxLines,
                 overflow = overflow,
                 modifier = Modifier.clearAndSetSemantics {},

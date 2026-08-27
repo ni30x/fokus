@@ -1134,27 +1134,10 @@ constructor(
                         delay(250)
                         if (requestId != searchQueryRequestId || !isActive) return@launch
 
-                        val (mediaRes, docRes, broadFilesRes, contactsRes, callLogsRes, msgsRes, calRes) =
+                        val (contactsRes, callLogsRes, msgsRes, calRes) =
                             withContext(Dispatchers.IO) {
                                 coroutineScope {
                                     val isMathOnly = quickAction is QuickActionResult.MathResult && !trimmed.any { it.isLetter() }
-                                    val hasDigit = trimmed.any { it.isDigit() }
-                                    val hasLetter = trimmed.any { it.isLetter() }
-
-                                    // Media query: only if not purely mathematical and media permission is available
-                                    val mediaDeferred = if (!isMathOnly && (LocalSearchManager.hasVisualMediaPermission(context) || LocalSearchManager.hasAudioPermission(context))) {
-                                        async { LocalSearchManager.searchMedia(context, trimmed) }
-                                    } else null
-
-                                    // Document query (SAF Indexed): only if folders are indexed and not math-only
-                                    val docsDeferred = if (!isMathOnly && _uiState.value.indexedFolders.isNotEmpty()) {
-                                        async { documentIndexManager.searchDocuments(trimmed) }
-                                    } else null
-
-                                    // Broad storage file search: if broad file access permission is granted
-                                    val broadFilesDeferred = if (!isMathOnly && LocalSearchManager.hasBroadFileAccess(context)) {
-                                        async { LocalSearchManager.searchBroadStorageFiles(context, trimmed) }
-                                    } else null
 
                                     // Contacts query: check permission and relevance
                                     val contactsDeferred = if (!isMathOnly && ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
@@ -1176,39 +1159,25 @@ constructor(
                                         async { LocalSearchManager.searchCalendar(context, trimmed) }
                                     } else null
 
-                                    val media = mediaDeferred?.await() ?: emptyList()
-                                    val docs = docsDeferred?.await() ?: emptyList()
-                                    val broadFiles = broadFilesDeferred?.await() ?: emptyList()
                                     val contacts = contactsDeferred?.await() ?: emptyList()
                                     val callLogs = callLogsDeferred?.await() ?: emptyList()
                                     val msgs = msgsDeferred?.await() ?: emptyList()
                                     val cal = calDeferred?.await() ?: emptyList()
 
-                                    ResultsBundle(media, docs, broadFiles, contacts, callLogs, msgs, cal)
+                                    ResultsBundle(contacts, callLogs, msgs, cal)
                                 }
                             }
 
                         if (requestId != searchQueryRequestId || !isActive) return@launch
-
-                        // Deduplicate SAF-indexed documents and broad storage documents
-                        val deduplicatedDocs = LocalSearchManager.deduplicateDocumentsAndFiles(docRes, broadFilesRes)
-
-                        val filesRes = if (broadFilesRes.isNotEmpty()) {
-                            broadFilesRes
-                        } else {
-                            mediaRes.map {
-                                FileSearchResult(it.id, it.displayName, it.uri.toString(), it.sizeBytes, it.uri, it.mimeType)
-                            }
-                        }
 
                         _uiState.update { state ->
                             if (requestId != searchQueryRequestId || state.searchQuery != query) {
                                 state
                             } else {
                                 state.copy(
-                                        mediaResults = mediaRes,
-                                        documentResults = deduplicatedDocs,
-                                        fileResults = filesRes,
+                                        mediaResults = emptyList(),
+                                        documentResults = emptyList(),
+                                        fileResults = emptyList(),
                                         contactResults = contactsRes,
                                         callLogResults = callLogsRes,
                                         messageResults = msgsRes,
@@ -1221,9 +1190,6 @@ constructor(
     }
 
     private data class ResultsBundle(
-        val media: List<MediaSearchResult>,
-        val docs: List<DocumentSearchResult>,
-        val broadFiles: List<FileSearchResult>,
         val contacts: List<ContactSearchResult>,
         val callLogs: List<CallLogSearchResult>,
         val msgs: List<MessageSearchResult>,

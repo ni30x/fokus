@@ -1,4 +1,4 @@
-name: Android Auto APK Build & Release
+name: Android Auto Build & Release
 
 on:
   push:
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       build_type:
-        description: 'Build Type (all, debug, release)'
+        description: 'Build Type (all, debug, release, bundle)'
         required: false
         default: 'all'
         type: choice
@@ -24,6 +24,7 @@ on:
           - all
           - debug
           - release
+          - bundle
       run_tests:
         description: 'Run Unit Tests'
         required: false
@@ -39,8 +40,8 @@ permissions:
   packages: write
 
 jobs:
-  build-apks:
-    name: Build & Export APKs
+  build-and-release:
+    name: Build & Export Artifacts
     runs-on: ubuntu-latest
 
     steps:
@@ -95,13 +96,13 @@ jobs:
             echo "has_signing=true" >> "$GITHUB_OUTPUT"
             echo "keystore_path=release.keystore" >> "$GITHUB_OUTPUT"
           else
-            echo "Release signing secrets not fully provided. Building unsigned release APK..."
+            echo "Release signing secrets not fully provided. Building unsigned release artifacts..."
             echo "has_signing=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run Unit Tests
         if: ${{ github.event.inputs.run_tests != false && github.event.inputs.run_tests != 'false' }}
-        run: ./gradlew testDebugUnitTest
+        run: ./gradlew :app:testDebugUnitTest
 
       - name: Build Debug APK
         if: ${{ github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'debug' || github.event_name != 'workflow_dispatch' }}
@@ -120,25 +121,45 @@ jobs:
         if: ${{ steps.signing-check.outputs.has_signing != 'true' && (github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'release' || github.event_name != 'workflow_dispatch') }}
         run: ./gradlew :app:assembleRelease
 
-      - name: Collect & Organize APK Artifacts
-        id: collect-apks
+      - name: Build Release AAB Bundle (Signed)
+        if: ${{ steps.signing-check.outputs.has_signing == 'true' && (github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'bundle' || github.event_name == 'release') }}
+        env:
+          ANDROID_KEYSTORE_PATH: release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew :app:bundleRelease
+
+      - name: Build Release AAB Bundle (Unsigned)
+        if: ${{ steps.signing-check.outputs.has_signing != 'true' && (github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'bundle' || github.event_name == 'release') }}
+        run: ./gradlew :app:bundleRelease
+
+      - name: Collect & Organize Build Artifacts
+        id: collect-artifacts
         run: |
           mkdir -p artifacts
-          echo "Finding all built APKs..."
-          find app/build/outputs/apk -type f -name '*.apk'
+          echo "Finding all built APKs and AABs..."
+          find app/build/outputs -type f \( -name '*.apk' -o -name '*.aab' \) || true
           
           # Find and copy debug APK
-          DEBUG_APK=$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)
+          DEBUG_APK=$(find app/build/outputs/apk/debug -type f -name '*.apk' 2>/dev/null | head -n 1)
           if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
             cp "$DEBUG_APK" artifacts/fokus-launcher-debug.apk
             echo "Copied debug APK -> artifacts/fokus-launcher-debug.apk"
           fi
 
           # Find and copy release APK
-          RELEASE_APK=$(find app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)
+          RELEASE_APK=$(find app/build/outputs/apk/release -type f -name '*.apk' 2>/dev/null | head -n 1)
           if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
             cp "$RELEASE_APK" artifacts/fokus-launcher-release.apk
             echo "Copied release APK -> artifacts/fokus-launcher-release.apk"
+          fi
+
+          # Find and copy release AAB
+          RELEASE_AAB=$(find app/build/outputs/bundle/release -type f -name '*.aab' 2>/dev/null | head -n 1)
+          if [ -n "$RELEASE_AAB" ] && [ -f "$RELEASE_AAB" ]; then
+            cp "$RELEASE_AAB" artifacts/fokus-launcher-release.aab
+            echo "Copied release AAB -> artifacts/fokus-launcher-release.aab"
           fi
 
           echo "Generated artifacts in artifacts/:"
@@ -162,21 +183,31 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload All Built APK Artifacts
+      - name: Upload Release AAB Bundle
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: fokus-launcher-all-apks
-          path: artifacts/*.apk
+          name: fokus-launcher-release-aab
+          path: app/build/outputs/bundle/release/*.aab
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Attach APKs to GitHub Release
+      - name: Upload All Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fokus-launcher-all-artifacts
+          path: artifacts/*
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Attach Artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
         if: ${{ github.event_name == 'release' || startsWith(github.ref, 'refs/tags/') }}
         with:
           files: |
-            artifacts/*.apk
+            artifacts/*
             app/build/outputs/apk/**/*.apk
+            app/build/outputs/bundle/**/*.aab
           fail_on_unmatched_files: false
           generate_release_notes: true

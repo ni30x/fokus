@@ -520,6 +520,12 @@ private fun SettingsScreenContent(
                         ),
                         enabled = !uiState.homeUsesPhotoWallpaper
                 )
+                SettingsToggleRow(
+                        label = stringResource(R.string.settings_black_text_label),
+                        subtitle = stringResource(R.string.settings_black_text_subtitle),
+                        checked = uiState.blackTextEnabled,
+                        onCheckedChange = viewModel::setBlackTextEnabled,
+                )
                 SettingsRow(
                         label = stringResource(R.string.settings_set_background_image),
                         verticalPadding = 12.dp,

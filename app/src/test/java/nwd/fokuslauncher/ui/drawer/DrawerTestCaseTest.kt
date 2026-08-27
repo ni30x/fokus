@@ -292,6 +292,7 @@ class DrawerTestCaseTest {
 
     @Test
     fun `drawer - search mode filters apps and handles query state`() {
+        drawerSearchAutoLaunchFlow.value = false
         viewModel.onSearchQueryChanged("calc")
         testDispatcher.scheduler.advanceUntilIdle()
         assertEquals("calc", viewModel.uiState.value.searchQuery)

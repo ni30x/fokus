@@ -13,6 +13,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -79,6 +80,7 @@ import nwd.fokuslauncher.ui.settings.ProfileNamesSettingsScreen
 import nwd.fokuslauncher.ui.settings.SettingsScreen
 import nwd.fokuslauncher.ui.settings.SettingsViewModel
 import nwd.fokuslauncher.ui.theme.FokusBackdrop
+import nwd.fokuslauncher.ui.theme.HomeDrawerBlackTextTheme
 import nwd.fokuslauncher.ui.widgets.WidgetPageScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -201,6 +203,8 @@ fun FokusNavGraph(
     }
     val photoDrawerOverlay by
             navGraphViewModel.photoWallpaperDrawerOverlayUiState.collectAsStateWithLifecycle()
+    val blackTextEnabled by
+            navGraphViewModel.blackTextEnabled.collectAsStateWithLifecycle()
     val overlayScrimIntensity =
             if (photoDrawerOverlay.usesPhotoWallpaper) photoDrawerOverlay.intensityMultiplier
             else 1f
@@ -212,31 +216,45 @@ fun FokusNavGraph(
                 )
             }
 
+    val animatedBlurRadius by animateIntAsState(
+        targetValue = if (shouldApplyWindowEffects && crossWindowBlurEnabled)
+            FokusBackdrop.WINDOW_BACKGROUND_BLUR_RADIUS else 0,
+        animationSpec = tween(ANIM_DURATION),
+        label = "drawerWindowBlur"
+    )
+
+    LaunchedEffect(animatedBlurRadius, activity) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            activity?.window?.setBackgroundBlurRadius(animatedBlurRadius)
+        }
+    }
+
     LaunchedEffect(shouldApplyWindowEffects, crossWindowBlurEnabled, activity) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val window = activity?.window
             if (window != null) {
                 if (shouldApplyWindowEffects) {
-                    window.setBackgroundBlurRadius(
-                        if (crossWindowBlurEnabled) FokusBackdrop.WINDOW_BACKGROUND_BLUR_RADIUS else 0
-                    )
                     if (crossWindowBlurEnabled) {
                         window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
                         window.attributes.blurBehindRadius = FokusBackdrop.WINDOW_BLUR_BEHIND_RADIUS
+                        window.attributes = window.attributes
                     } else {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-                        window.attributes.blurBehindRadius = 0
+                        if (window.attributes.blurBehindRadius != 0) {
+                            window.attributes.blurBehindRadius = 0
+                            window.attributes = window.attributes
+                        }
                     }
                     window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
                     window.setDimAmount(FokusBackdrop.windowDimAmount(crossWindowBlurEnabled))
-                    window.attributes = window.attributes
                 } else {
-                    window.setBackgroundBlurRadius(0)
                     window.clearFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
                     window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-                    window.attributes.blurBehindRadius = 0
+                    if (window.attributes.blurBehindRadius != 0) {
+                        window.attributes.blurBehindRadius = 0
+                        window.attributes = window.attributes
+                    }
                     window.setDimAmount(0f)
-                    window.attributes = window.attributes
                 }
             }
         }
@@ -263,20 +281,21 @@ fun FokusNavGraph(
             ) {
                 BackHandler(enabled = true) { /* launcher: no-op */ }
 
-                // Eager scope: start loading apps and pre-warming drawer caches as soon as Home is
-                // shown, not on first drawer composition (faster first open).
-                val appDrawerViewModel: AppDrawerViewModel = hiltViewModel()
+                HomeDrawerBlackTextTheme(enabled = blackTextEnabled) {
+                    // Eager scope: start loading apps and pre-warming drawer caches as soon as Home is
+                    // shown, not on first drawer composition (faster first open).
+                    val appDrawerViewModel: AppDrawerViewModel = hiltViewModel()
 
-                val homeViewModel: HomeViewModel = hiltViewModel()
-                val lifecycleOwner = LocalLifecycleOwner.current
+                    val homeViewModel: HomeViewModel = hiltViewModel()
+                    val lifecycleOwner = LocalLifecycleOwner.current
 
-                val swipeLeftTarget by homeViewModel.swipeLeftTarget.collectAsStateWithLifecycle()
-                val swipeRightTarget by homeViewModel.swipeRightTarget.collectAsStateWithLifecycle()
+                    val swipeLeftTarget by homeViewModel.swipeLeftTarget.collectAsStateWithLifecycle()
+                    val swipeRightTarget by homeViewModel.swipeRightTarget.collectAsStateWithLifecycle()
 
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxSize()
-                ) {
+                    BoxWithConstraints(
+                        modifier = Modifier
+                            .fillMaxSize()
+                    ) {
                     val density = LocalDensity.current
                     val pageWidthPx = with(density) { maxWidth.toPx() }
                     val maxSlidePx = with(density) { (maxWidth * HORIZONTAL_MAX_SLIDE_RATIO).toPx() }
@@ -605,6 +624,7 @@ fun FokusNavGraph(
                         },
                         onClose = { showDrawer = false }
                     )
+                }
                 }
             }
 

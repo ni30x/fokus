@@ -52,7 +52,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.width
 import nwd.fokuslauncher.ui.util.applyVerticalSlotReorder
 import androidx.compose.foundation.lazy.LazyColumn
@@ -113,8 +119,6 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import nwd.fokuslauncher.data.search.LocalSearchManager
-import nwd.fokuslauncher.data.search.MediaPermissionState
 import nwd.fokuslauncher.R
 import nwd.fokuslauncher.data.model.AppInfo
 import nwd.fokuslauncher.data.model.DrawerAppSortMode
@@ -506,78 +510,10 @@ private fun DrawerAppListColumn(
     }
 
     val drawerContext = LocalContext.current
-    var permissionCheckTrigger by remember { mutableIntStateOf(0) }
-    var mediaPermissionDenied by remember { mutableStateOf(false) }
-
-    LifecycleResumeEffect(Unit) {
-        permissionCheckTrigger++
-        onPauseOrDispose {}
-    }
-    
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        permissionCheckTrigger++
-        val anyGranted = results.values.any { it }
-        if (!anyGranted && results.isNotEmpty()) {
-            mediaPermissionDenied = true
-        } else {
-            mediaPermissionDenied = false
-        }
-    }
-
-    val permissionsToRequest = remember {
-        LocalSearchManager.getRequiredMediaPermissions().toTypedArray()
-    }
-
-    val openDocumentTreeLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            onAddSearchFolder(uri)
-        }
-    }
-
-    var showManageFoldersSheet by remember { mutableStateOf(false) }
-
-    val hasBroadFileAccess = remember(permissionCheckTrigger) {
-        LocalSearchManager.hasBroadFileAccess(drawerContext)
-    }
-
-    val requestBroadFileAccess: () -> Unit = {
-        try {
-            val intent = LocalSearchManager.createBroadFileAccessIntent(drawerContext)
-            drawerContext.startActivity(intent)
-        } catch (e: Exception) {
-            android.widget.Toast.makeText(drawerContext, "Cannot open file access settings", android.widget.Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    if (showManageFoldersSheet) {
-        ManageIndexedFoldersBottomSheet(
-            folders = uiState.indexedFolders,
-            isIndexing = uiState.isIndexingDocuments,
-            hasBroadFileAccess = hasBroadFileAccess,
-            onRequestBroadFileAccess = requestBroadFileAccess,
-            onDismiss = { showManageFoldersSheet = false },
-            onAddFolder = { openDocumentTreeLauncher.launch(null) },
-            onRemoveFolder = onRemoveSearchFolder,
-            onReindexAll = onReindexSearchFolders
-        )
-    }
-
-    val mediaPermissionStatus = remember(permissionCheckTrigger, uiState.searchQuery, mediaPermissionDenied) {
-        LocalSearchManager.getMediaPermissionState(
-            context = drawerContext,
-            isPermissionDeniedByUser = mediaPermissionDenied
-        )
-    }
 
     val hasAnyAppMatches = displayProfileSections.any { it.apps.isNotEmpty() } || (uiState.isPrivateSpaceUnlocked && displayPrivateApps.isNotEmpty())
     val hasAnyMatches = hasAnyAppMatches ||
         uiState.settingsResults.isNotEmpty() ||
-        uiState.mediaResults.isNotEmpty() ||
-        uiState.documentResults.isNotEmpty() ||
         uiState.contactResults.isNotEmpty() ||
         uiState.callLogResults.isNotEmpty() ||
         uiState.messageResults.isNotEmpty() ||
@@ -808,41 +744,12 @@ private fun DrawerAppListColumn(
             universalSearchResults(
                 context = drawerContext,
                 settingsResults = uiState.settingsResults,
-                mediaResults = uiState.mediaResults,
-                documentResults = uiState.documentResults,
-                fileResults = uiState.fileResults,
                 contactResults = uiState.contactResults,
                 callLogResults = uiState.callLogResults,
                 messageResults = uiState.messageResults,
                 calendarResults = uiState.calendarResults,
-                indexedFolders = uiState.indexedFolders,
-                totalIndexedDocuments = uiState.totalIndexedDocuments,
-                isIndexingDocuments = uiState.isIndexingDocuments,
-                mediaPermissionStatus = mediaPermissionStatus,
-                hasBroadFileAccess = hasBroadFileAccess,
                 hasAnyMatches = hasAnyMatches,
                 searchQuery = uiState.searchQuery,
-                onRequestMediaPermission = {
-                    permissionLauncher.launch(permissionsToRequest)
-                },
-                onRequestBroadFileAccess = requestBroadFileAccess,
-                onOpenAppSettings = {
-                    try {
-                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = Uri.fromParts("package", drawerContext.packageName, null)
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        }
-                        drawerContext.startActivity(intent)
-                    } catch (e: Exception) {
-                        android.widget.Toast.makeText(drawerContext, "Cannot open settings", android.widget.Toast.LENGTH_SHORT).show()
-                    }
-                },
-                onChooseFolder = {
-                    openDocumentTreeLauncher.launch(null)
-                },
-                onOpenManageFolders = {
-                    showManageFoldersSheet = true
-                },
                 onCloseDrawer = closeWithFocusReset
             )
         }
@@ -1352,6 +1259,7 @@ fun AppDrawerContent(
             if (!hideCharacterScroll && uiState.searchQuery.isEmpty()) {
                 DrawerAlphabetIndex(
                         dynamicAlphabet = dynamicAlphabet,
+                        hasApps = { letter -> letterIndexMap.containsKey(letter) },
                         onLetterSelected = onLetterSelected,
                         modifier = Modifier.align(Alignment.CenterEnd)
                 )
@@ -1364,7 +1272,7 @@ fun AppDrawerContent(
                 modifier =
                         Modifier.fillMaxSize()
                                 .padding(top = contentTopPadding)
-                                .navigationBarsPadding()
+                                .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
                                 .testTag("app_drawer_screen")
         ) {
             if (useSidebarCategoryDrawer && uiState.categories.size > 1) {
@@ -1500,7 +1408,7 @@ private data class LetterVisualState(
         val translationXDp: Float = 0f,
         val translationYDp: Float = 0f,
         val scale: Float = 1f,
-        val alpha: Float = 0.5f,
+        val alpha: Float = 0.85f,
         val isHighlighted: Boolean = false,
 )
 
@@ -1509,6 +1417,7 @@ private val DEFAULT_LETTER_VISUAL_STATE = LetterVisualState()
 @Composable
 private fun BoxScope.DrawerAlphabetIndex(
         dynamicAlphabet: List<String>,
+        hasApps: (String) -> Boolean,
         onLetterSelected: (String, Boolean) -> Unit,
         modifier: Modifier = Modifier,
 ) {
@@ -1519,15 +1428,17 @@ private fun BoxScope.DrawerAlphabetIndex(
     val scope = rememberCoroutineScope()
 
     val selectLetterInternal: (String, Boolean) -> Unit = { letter, isDrag ->
-        if (activeLetter != letter) {
-            activeLetter = letter
-            onLetterSelected(letter, isDrag)
-        }
-        if (!isDrag) {
-            activeLetterJob?.cancel()
-            activeLetterJob = scope.launch {
-                delay(500)
-                activeLetter = null
+        if (hasApps(letter)) {
+            if (activeLetter != letter) {
+                activeLetter = letter
+                onLetterSelected(letter, isDrag)
+            }
+            if (!isDrag) {
+                activeLetterJob?.cancel()
+                activeLetterJob = scope.launch {
+                    delay(500)
+                    activeLetter = null
+                }
             }
         }
     }
@@ -1537,7 +1448,7 @@ private fun BoxScope.DrawerAlphabetIndex(
 
     // Precalculate letter transforms once per activeLetter / isHoldingIndex change
     // When idle (activeIdx == -1), no exponential math or allocations occur.
-    val letterVisualStates = remember(activeIdx, holdingScaleMultiplier, dynamicAlphabet.size) {
+    val letterVisualStates = remember(activeIdx, holdingScaleMultiplier, dynamicAlphabet, hasApps) {
         if (activeIdx == -1) {
             null
         } else {
@@ -1545,15 +1456,21 @@ private fun BoxScope.DrawerAlphabetIndex(
             val twoSigmaSq = 2f * sigma * sigma
             val dispersionMaxDp = 20f
             Array(dynamicAlphabet.size) { i ->
+                val letter = dynamicAlphabet[i]
+                val letterHasApps = hasApps(letter)
                 val dist = abs(i - activeIdx).toFloat()
                 if (dist > 8f) {
-                    DEFAULT_LETTER_VISUAL_STATE
+                    if (!letterHasApps) {
+                        DEFAULT_LETTER_VISUAL_STATE.copy(alpha = 0.25f)
+                    } else {
+                        DEFAULT_LETTER_VISUAL_STATE
+                    }
                 } else {
                     val factor = exp(-(dist * dist) / twoSigmaSq)
                     val tX = factor * -110f
                     val holdingBonus = if (i == activeIdx) (holdingScaleMultiplier - 1f) else 0f
                     val scale = 1.0f + (factor * 0.35f) + holdingBonus
-                    val aVal = 0.4f + factor * 0.6f
+                    val aVal = if (!letterHasApps) 0.25f else (0.55f + factor * 0.45f)
                     val dispersionFactor = (dist / 6f).coerceIn(0f, 1f) * factor
                     val yOffsetDp = when {
                         i < activeIdx -> -dispersionFactor * dispersionMaxDp
@@ -1565,7 +1482,7 @@ private fun BoxScope.DrawerAlphabetIndex(
                             translationYDp = yOffsetDp,
                             scale = scale,
                             alpha = aVal,
-                            isHighlighted = (i == activeIdx)
+                            isHighlighted = (i == activeIdx && letterHasApps)
                     )
                 }
             }
@@ -1590,12 +1507,12 @@ private fun BoxScope.DrawerAlphabetIndex(
                                         translationY = badgeYRatio * indexHeight - 24.dp.toPx()
                                     }
                                     .background(
-                                            color = Color(0xFF222222),
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
                                             shape = RoundedCornerShape(12.dp),
                                     )
                                     .border(
                                             width = 1.dp,
-                                            color = Color.White.copy(alpha = 0.3f),
+                                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
                                             shape = RoundedCornerShape(12.dp),
                                     )
                                     .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1603,7 +1520,7 @@ private fun BoxScope.DrawerAlphabetIndex(
             ) {
                 Text(
                         text = activeLetter ?: "",
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onBackground,
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
@@ -1627,7 +1544,7 @@ private fun BoxScope.DrawerAlphabetIndex(
                                                             (offset.y / indexHeight).coerceIn(
                                                                     0f,
                                                                     1f
-                                                            )
+                                                                )
                                                     val targetIdx =
                                                             (percentage *
                                                                             (dynamicAlphabet.size -
@@ -1679,7 +1596,7 @@ private fun BoxScope.DrawerAlphabetIndex(
                                                             (offset.y / indexHeight).coerceIn(
                                                                     0f,
                                                                     1f
-                                                            )
+                                                                )
                                                     val targetIdx =
                                                             (percentage *
                                                                             (dynamicAlphabet.size -
@@ -1708,6 +1625,7 @@ private fun BoxScope.DrawerAlphabetIndex(
                 val state = letterVisualStates?.getOrNull(i)
                 AlphabetLetterItem(
                         letter = letter,
+                        hasApps = hasApps(letter),
                         visualState = state,
                 )
             }
@@ -1718,21 +1636,27 @@ private fun BoxScope.DrawerAlphabetIndex(
 @Composable
 private fun AlphabetLetterItem(
         letter: String,
+        hasApps: Boolean,
         visualState: LetterVisualState?,
         modifier: Modifier = Modifier,
 ) {
     val isHighlighted = visualState?.isHighlighted == true
+    val effectiveAlpha = if (!hasApps) {
+        0.25f
+    } else {
+        visualState?.alpha ?: 0.85f
+    }
     val graphicsModifier = if (visualState != null && visualState != DEFAULT_LETTER_VISUAL_STATE) {
         Modifier.graphicsLayer {
             translationX = visualState.translationXDp.dp.toPx()
             translationY = visualState.translationYDp.dp.toPx()
             scaleX = visualState.scale
             scaleY = visualState.scale
-            alpha = visualState.alpha
+            alpha = effectiveAlpha
         }
     } else {
         Modifier.graphicsLayer {
-            alpha = 0.5f
+            alpha = effectiveAlpha
         }
     }
 
@@ -1741,8 +1665,8 @@ private fun AlphabetLetterItem(
             style =
                     TextStyle(
                             color =
-                                    if (isHighlighted) Color.White
-                                    else Color.LightGray,
+                                    if (isHighlighted) MaterialTheme.colorScheme.onBackground
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight =

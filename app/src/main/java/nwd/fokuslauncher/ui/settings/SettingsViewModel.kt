@@ -137,6 +137,8 @@ data class SettingsUiState(
         val launcherVisualStyle: LauncherVisualStyle = LauncherVisualStyle.CLASSIC,
         /** Text shadow + icon halo; independent of [launcherVisualStyle]. */
         val launcherGlowEnabled: Boolean = false,
+        /** True to force black text on home screen and app drawer. */
+        val blackTextEnabled: Boolean = false,
         /** True when the home wallpaper is not solid black (image or busy wallpaper). */
         val homeUsesPhotoWallpaper: Boolean = false,
         /** Uniform outline stroke in dp on image wallpaper; 0 = launcher defaults per widget. */
@@ -398,7 +400,8 @@ constructor(
                             preferencesManager.appLocaleTagFlow,
                             preferencesManager.homeAlignmentFlow,
                             preferencesManager.allowLandscapeRotationFlow,
-                    ) { fontOutlineDrawer, localeTag, homeAlignment, allowLandscape ->
+                            preferencesManager.blackTextEnabledFlow,
+                    ) { fontOutlineDrawer, localeTag, homeAlignment, allowLandscape, blackTextEnabled ->
                         val (fontVisual, outlineWidthDp, drawerOverlayIntensity) = fontOutlineDrawer
                         LookPrefs(
                                 launcherFontFamilyName = fontVisual.family,
@@ -407,6 +410,7 @@ constructor(
                                 launcherFontScale = fontVisual.scale,
                                 launcherVisualStyle = fontVisual.visualStyle,
                                 launcherGlowEnabled = fontVisual.glowEnabled,
+                                blackTextEnabled = blackTextEnabled,
                                 homeUsesPhotoWallpaper = fontVisual.usesPhotoWallpaper,
                                 photoWallpaperOutlineWidthDp = outlineWidthDp,
                                 photoWallpaperDrawerOverlayIntensity = drawerOverlayIntensity,
@@ -558,6 +562,7 @@ constructor(
                         launcherFontScale = look.launcherFontScale,
                         launcherVisualStyle = look.launcherVisualStyle,
                         launcherGlowEnabled = look.launcherGlowEnabled,
+                        blackTextEnabled = look.blackTextEnabled,
                         homeUsesPhotoWallpaper = look.homeUsesPhotoWallpaper,
                         photoWallpaperOutlineWidthDp = look.photoWallpaperOutlineWidthDp,
                         photoWallpaperDrawerOverlayIntensity =
@@ -657,6 +662,7 @@ constructor(
             val launcherFontScale: Float,
             val launcherVisualStyle: LauncherVisualStyle,
             val launcherGlowEnabled: Boolean,
+            val blackTextEnabled: Boolean,
             val homeUsesPhotoWallpaper: Boolean,
             val photoWallpaperOutlineWidthDp: Float,
             val photoWallpaperDrawerOverlayIntensity: Float,
@@ -1157,6 +1163,9 @@ constructor(
             preferencesManager.setLauncherGlowEnabled(enabled)
         }
     }
+
+    fun setBlackTextEnabled(enabled: Boolean) =
+            launchPreferences { setBlackTextEnabled(enabled) }
 
     fun setPhotoWallpaperOutlineWidthDp(widthDp: Float) =
             launchPreferences { setPhotoWallpaperOutlineWidthDp(widthDp) }

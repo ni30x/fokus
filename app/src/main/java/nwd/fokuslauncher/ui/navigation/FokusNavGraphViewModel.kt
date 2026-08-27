@@ -27,6 +27,12 @@ class FokusNavGraphViewModel @Inject constructor(
                     false,
             )
 
+    val blackTextEnabled: StateFlow<Boolean> =
+            preferencesManager.blackTextEnabledFlow.stateWhileSubscribedIn(
+                    viewModelScope,
+                    false,
+            )
+
     val photoWallpaperDrawerOverlayUiState: StateFlow<PhotoWallpaperDrawerOverlayUi> =
             combine(
                     preferencesManager.launcherAppearanceFlow.map { it.usesPhotoWallpaper },
