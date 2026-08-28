@@ -1,17 +1,17 @@
-# Fokus Launcher
+# fokus
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Maintained by ni30x](https://img.shields.io/badge/Maintainer-ni30x-blue?logo=github)](https://github.com/ni30x)
+[![Forked from luantak/FokusLauncher](https://img.shields.io/badge/Forked%20from-luantak%2FFokusLauncher-brightgreen?logo=github)](https://github.com/luantak/FokusLauncher)
 <a href="https://hosted.weblate.org/engage/fokus-launcher/">
 <img src="https://hosted.weblate.org/widget/fokus-launcher/fokus-launcher-app/svg-badge.svg" alt="Translation status" />
 </a>
 
-Fokus Launcher is an Android launcher for people who want a simpler, cleaner
-default experience. It focuses on fast access to time, weather, and core apps,
-with minimal visual noise.
+**fokus** is a minimal, distraction-free Android launcher designed for clarity, focus, and speed. It streamlines your mobile experience with quick access to time, weather, and core apps while eliminating visual clutter.
 
-[<img src="https://f-droid.org/badge/get-it-on.png"
-    alt="Get it on F-Droid"
-    height="80">](https://f-droid.org/packages/io.github.luantak.fokuslauncher/)
+> ℹ️ **Fork Notice**: This repository is forked from the original [luantak/FokusLauncher](https://github.com/luantak/FokusLauncher) and actively maintained and enhanced by [ni30x](https://github.com/ni30x) with additional customizations, layout controls, and persistence enhancements.
+
+---
 
 ## Screenshots
 
@@ -42,126 +42,103 @@ with minimal visual noise.
   </a>
 </p>
 
-## Current Feature Set
+---
 
-### Home screen and gestures
+## Key Features
 
-The home screen stays minimal: large clock and date, battery status, weather,
-favorite app labels, and a right-side shortcut rail. Tapping the clock, date, or
-weather opens the apps you configure for those widgets in settings. Swipe up for
-the drawer, swipe down for the notification shade, swipe left/right for shortcut
-targets.
+### 🏠 Minimal Home Screen & Quick Access
+- **Essential Info at a Glance**: Large typography clock, customizable date format, battery status, and weather with direct tap-to-open actions for your preferred calendar, clock, and weather apps.
+- **Quick Access Favorites**: Pin your primary apps directly onto the home screen with customizable text labels and order.
+- **Persistent App Layouts**: Home favorites, custom categories, and drawer order remember your package preferences even across uninstall and re-install cycles.
+- **Right-Side Shortcut Rail**: Quick launcher rail for fast one-tap shortcuts to your essential apps and deep launcher shortcuts.
 
-### App drawer
+### 📱 Intelligent App Drawer & Search
+- **Custom Categories**: Group apps into tailored categories or hide unwanted apps completely.
+- **Category Sidebar**: Toggle a vertical category rail on the left or right side with customizable category icons.
+- **Auto Keyboard & Instant Launch**: Automatically open the search keyboard on drawer open and launch the single matching app on enter.
+- **Dot Search**: Direct search integration:
+  - `. query` for default web or app searches.
+  - `.<letter> query` for custom shortcut targets and URL search templates (e.g. `.w weather`, `.y video`).
+- **Context Actions**: Long-press any app to rename, pin to home, categorize, hide, or uninstall.
 
-Search and categories narrow the list quickly, and you can define and assign
-categories in settings. A single matching app can launch on search. **Category
-sidebar** (Settings → **Use category sidebar**) swaps the bar for a vertical
-category rail. Use the search icon for text search, pick left or right
-placement, long-press a category to change its icon. **Dot search** sends the
-search field to the web or an app: `. query` for the default target,
-`.<letter> query` for a shortcut (for example `.a coffee`). Configure targets
-under Settings → Dot search (search-capable apps or URL templates with a query
-placeholder). Long-press an app for add to home, rename, hide, or uninstall.
+### 🎨 Deep Visual Customization
+- **Theme & Styles**: Choose from Classic, Neon, and Monochrome styles with subtle glow effects on typography and icons.
+- **Typography & Font Choices**: Select your preferred system or custom fonts.
+- **Wallpaper Options**: Support for live wallpapers, custom gallery images, or pure AMOLED pitch-black backgrounds.
 
-### Customization and profiles
+### 🔒 Privacy & Android 15+ Support
+- **Private Space Integration**: Secure lock/unlock integration for Android 15+ (API 35+) Private Space with dedicated app drawer sections.
+- **Multi-Profile Support**: Seamless support for Work profiles alongside personal apps.
 
-Edit home apps and shortcuts (including launcher shortcut actions), hide or
-rename apps, and manage launcher data from settings. Choose a custom font.
-Weather uses Open-Meteo (no API key) with a 30-minute cache. On Android 15+ (API
-35+), Private Space adds lock/unlock and a separate private-apps section in the
-drawer. Work profile apps appear with personal apps when a work profile is
-active.
+### ⚡ Smart Device Controls (Optional Accessibility)
+- **Double Tap to Lock**: Instantly lock your device by double-tapping an empty area on the home screen.
+- **Return Home After Lock**: Automatically return to the minimal home screen when unlocking the device after a configurable period of inactivity.
 
-### Device controls (optional)
+### 🚀 Seamless First-Run Onboarding
+- Easy step-by-step setup for permissions, default launcher selection, gesture tips, and initial home apps configuration.
 
-These features need Android's accessibility service.
-
-**Double tap to lock** locks the screen from a double-tap on empty home space.
-**Return home after long lock** notices when the device stayed locked with the
-screen off longer than a threshold you set (default 15 minutes) and brings Fokus
-to the foreground on unlock so you start on the home screen.
-
-## First-Run Experience
-
-On first launch, Fokus walks through onboarding with welcome, optional location
-permission for weather, default-launcher setup (only when needed), home-screen
-customization, swipe-shortcut setup, and quick gesture tips.
+---
 
 ## Build From Source
 
-Fokus Launcher targets Android 8.0+ (API 26). It currently builds with compile
-SDK / target SDK `36`, Gradle `9.1.0`, AGP `9.0.0`, and JDK toolchain `21` (the
-project code is compiled with Java 11 compatibility).
+**fokus** targets Android 8.0+ (API 26) through Android 16 (API 36).
 
 ### Development Environment
 
 - JDK 21 installed and available via `JAVA_HOME`
-- Android SDK with platform-tools, `platforms;android-36`, and
-  `build-tools;36.0.0`
-- Gradle wrapper (included in this repository)
+- Android SDK with platform-tools, `platforms;android-36`, and `build-tools;36.0.0`
+- Gradle wrapper (included)
 
-Android Studio is optional. The Gradle commands below are sufficient for builds
-and tests; use Android Studio only if you want the emulator, layout inspector,
-or Compose previews.
+### Build Commands
 
 ```bash
+# Build the debug APK
 ./gradlew assembleDebug
-```
 
-To install directly on a connected device:
-
-```bash
+# Install on a connected device
 ./gradlew installDebug
-```
 
-To run unit tests:
-
-```bash
+# Run all unit tests
 ./gradlew testDebugUnitTest
 ```
 
-The debug APK is generated at `app/build/outputs/apk/debug/`.
+The compiled APK will be located at `app/build/outputs/apk/debug/app-debug.apk`.
 
-## Project Stack
+---
 
-The app is written in Kotlin with Jetpack Compose and Material 3 for UI, Hilt
-for dependency injection, Room for local structured data, DataStore for
-preferences, and Navigation Compose for screen flow.
+## Tech Stack & Architecture
+
+- **Language**: Kotlin
+- **UI Framework**: Jetpack Compose with Material Design 3 (M3)
+- **Architecture**: MVVM / Clean Architecture with unidirectional data flow
+- **Dependency Injection**: Hilt
+- **Local Persistence**: Room Database & DataStore Preferences
+- **Weather Provider**: Open-Meteo API (no API key required, with local caching)
+- **Testing**: JUnit, MockK, Robolectric
+
+---
 
 ## Permissions
 
-| Permission                | Purpose                                          |
-| ------------------------- | ------------------------------------------------ |
-| `REQUEST_DELETE_PACKAGES` | Trigger uninstall flow from launcher actions     |
-| `INTERNET`                | Fetch weather data                               |
-| `ACCESS_COARSE_LOCATION`  | Show location-based weather (runtime prompt)     |
-| `ACCESS_HIDDEN_PROFILES`  | Private Space apps in the drawer when unlocked   |
-| `EXPAND_STATUS_BAR`       | Open notification shade from swipe-down gestures |
-| `SET_WALLPAPER`           | Set image or solid black wallpaper from settings |
+| Permission | Purpose |
+| :--- | :--- |
+| `REQUEST_DELETE_PACKAGES` | Trigger uninstall flow from launcher actions |
+| `INTERNET` | Fetch weather forecasts from Open-Meteo |
+| `ACCESS_COARSE_LOCATION` | Show location-based weather (optional runtime prompt) |
+| `ACCESS_HIDDEN_PROFILES` | Support Private Space apps on Android 15+ |
+| `EXPAND_STATUS_BAR` | Pull down notification shade via gestures |
+| `SET_WALLPAPER` | Apply custom or solid wallpapers from settings |
 
-**Double tap to lock** and **return home after long lock** require the optional
-accessibility service.
+---
 
-## Contributing
+## Contributors & Acknowledgements
 
-If you want to improve Fokus, open an issue or send a pull request with a clear
-problem statement and reproduction details when relevant. Focused changes,
-thoughtful UX decisions, and good test coverage are always appreciated. For bug
-reports, **Settings → Export app logs** can attach a diagnostic file to your
-message.
+- **[ni30x](https://github.com/ni30x)** — Main developer, feature additions, persistence improvements, and maintainer of this fork.
+- **[luantak](https://github.com/luantak/FokusLauncher)** — Original creator of FokusLauncher.
+- **Community Translators** — UI translations powered by [Weblate](https://hosted.weblate.org/engage/fokus-launcher/).
 
-### Translations
-
-All UI strings can be translated in your language through
-[Weblate](https://hosted.weblate.org/engage/fokus-launcher/).
-
-### Community
-
-If you want to chat about Fokus feel free to join us on Matrix
-[here](https://matrix.to/#/#fokus:matrix.org).
+---
 
 ## License
 
-Fokus Launcher is licensed under the GNU General Public License v3.0. See
-[LICENSE](LICENSE).
+This project is licensed under the [GNU General Public License v3.0](LICENSE).

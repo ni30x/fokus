@@ -197,7 +197,7 @@
     <string name="settings_drawer_rail_position_left">Sol</string>
     <string name="settings_drawer_rail_position_right">Sağ</string>
     <string name="edit_home_section_all_apps" translatable="false">\@string/drawer_filter_all_apps</string>
-    <string name="app_name" translatable="false">Fokus Launcher</string>
+    <string name="app_name" translatable="false">fokus</string>
     <string name="drawer_reorder">Sırala</string>
     <string name="drawer_reorder_done">Bitti</string>
     <string name="cd_open_subpage">Başka bir ekran açar</string>

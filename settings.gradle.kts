@@ -34,6 +34,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Fokus Launcher"
+rootProject.name = "fokus"
 include(":app")
  
