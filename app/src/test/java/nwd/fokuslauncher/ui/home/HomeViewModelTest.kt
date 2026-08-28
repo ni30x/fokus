@@ -525,7 +525,7 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun `refreshInstalledApps removes uninstalled favorites`() {
+    fun `refreshInstalledApps does not clear uninstalled favorites from preferences`() {
         every { appRepository.getInstalledApps() } returns listOf(
             AppInfo(packageName = "com.lu4p.music", label = "Music", icon = null)
         )
@@ -537,12 +537,8 @@ class HomeViewModelTest {
 
         viewModel.refreshInstalledApps()
         verify(timeout = 2_000) { appRepository.invalidateCache() }
-        coVerify(timeout = 2_000) {
-            preferencesManager.setFavorites(
-                match { favorites ->
-                    favorites.size == 1 && favorites[0].packageName == "com.lu4p.music"
-                }
-            )
+        coVerify(exactly = 0) {
+            preferencesManager.setFavorites(any())
         }
         collectJob.cancel()
     }
@@ -598,46 +594,36 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun `removed package disappears from favorites immediately`() {
-        createViewModel()
+    fun `removed package disappears from favorites immediately without clearing preference`() {
+        val viewModel = createViewModel()
+        val collectJob = CoroutineScope(testDispatcher).launch { viewModel.favorites.collect { } }
         testDispatcher.scheduler.runCurrent()
 
         removedPackages.tryEmit(RemovedApp(packageName = "com.lu4p.music", profileKey = "0"))
         testDispatcher.scheduler.runCurrent()
 
-        coVerify {
-            preferencesManager.setFavorites(
-                match { favorites ->
-                    favorites.none { it.packageName == "com.lu4p.music" } &&
-                        favorites.size == 2
-                }
-            )
-        }
+        assertTrue(viewModel.favorites.value.none { it.packageName == "com.lu4p.music" })
+        coVerify(exactly = 0) { preferencesManager.setFavorites(any()) }
+        collectJob.cancel()
     }
 
     @Test
-    fun `removed package only clears matching favorite profile`() {
+    fun `removed package only clears matching favorite profile from active favorites`() {
         every { preferencesManager.favoritesFlow } returns flowOf(
             listOf(
                 FavoriteApp(label = "Music", packageName = "com.lu4p.music", iconName = "music", profileKey = "0"),
                 FavoriteApp(label = "Music Work", packageName = "com.lu4p.music", iconName = "music", profileKey = "42")
             )
         )
-        createViewModel()
+        val viewModel = createViewModel()
+        val collectJob = CoroutineScope(testDispatcher).launch { viewModel.favorites.collect { } }
         testDispatcher.scheduler.runCurrent()
 
         removedPackages.tryEmit(RemovedApp(packageName = "com.lu4p.music", profileKey = "42"))
         testDispatcher.scheduler.runCurrent()
 
-        coVerify {
-            preferencesManager.setFavorites(
-                match { favorites ->
-                    favorites.size == 1 &&
-                        favorites.single().packageName == "com.lu4p.music" &&
-                        favorites.single().profileKey == "0"
-                }
-            )
-        }
+        coVerify(exactly = 0) { preferencesManager.setFavorites(any()) }
+        collectJob.cancel()
     }
 
     @Test
@@ -787,15 +773,11 @@ class HomeViewModelTest {
         viewModel.refreshInstalledApps()
         testDispatcher.scheduler.advanceUntilIdle()
 
-        coVerify {
-            preferencesManager.setFavorites(
-                match { favorites ->
-                    favorites.size == 1 &&
-                        favorites.single().packageName == "com.lu4p.chrome" &&
-                        favorites.single().profileKey == "0"
-                }
-            )
+        coVerify(exactly = 0) {
+            preferencesManager.setFavorites(any())
         }
+        assertEquals(1, viewModel.favorites.value.size)
+        assertEquals("0", viewModel.favorites.value.single().profileKey)
         collectJob.cancel()
     }
 

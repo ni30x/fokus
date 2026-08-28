@@ -83,6 +83,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -243,16 +244,9 @@ private fun LazyItemScope.ReorderableDrawerAppRow(
     }
 
     val visualTransformModifier = when {
-        offsetY != 0f -> {
+        offsetY != 0f || rowAlpha < 1f -> {
             Modifier.graphicsLayer {
                 translationY = offsetY
-                if (rowAlpha < 1f) {
-                    alpha = rowAlpha
-                }
-            }
-        }
-        rowAlpha < 1f -> {
-            Modifier.graphicsLayer {
                 alpha = rowAlpha
             }
         }
@@ -442,6 +436,11 @@ private fun DrawerOverflowMenu(
 }
 
 @OptIn(ExperimentalFoundationApi::class)
+private fun getAppIndexLetter(label: String): String {
+    val firstChar = label.firstOrNull()?.uppercaseChar()?.toString()
+    return if (firstChar != null && firstChar.first().isLetter()) firstChar else "#"
+}
+
 @Composable
 private fun DrawerAppListColumn(
         listState: LazyListState,
@@ -457,7 +456,8 @@ private fun DrawerAppListColumn(
         onReorderPrivateApps: (fromIndex: Int, toIndex: Int) -> Unit,
         onAddSearchFolder: (Uri) -> Unit = {},
         onRemoveSearchFolder: (Long, String) -> Unit = { _, _ -> },
-        onReindexSearchFolders: () -> Unit = {}
+        onReindexSearchFolders: () -> Unit = {},
+        highlightedLetter: String? = null,
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
     val closeWithFocusReset: () -> Unit = {
@@ -560,6 +560,16 @@ private fun DrawerAppListColumn(
                         contentType = { "app_row" }
                 ) { index ->
                     val app = section.apps[index]
+                    val appLetter = remember(app.label) { getAppIndexLetter(app.label) }
+                    val isHighlighted =
+                            highlightedLetter == null ||
+                                    appLetter.equals(highlightedLetter, ignoreCase = true)
+                    val targetAlpha = if (isHighlighted) 1f else 0.2f
+                    val animatedAlpha by animateFloatAsState(
+                            targetValue = targetAlpha,
+                            animationSpec = tween(durationMillis = 150),
+                            label = "app_highlight_alpha"
+                    )
                     val currentIndex by rememberUpdatedState(index)
                     val latestSectionApps = rememberUpdatedState(section.apps)
                     val isDraggedRow =
@@ -629,7 +639,7 @@ private fun DrawerAppListColumn(
                             allowCustomDragReorder = allowCustomDragReorder,
                             isDraggedRow = isDraggedRow,
                             offsetY = offsetY,
-                            rowAlpha = 1f,
+                            rowAlpha = animatedAlpha,
                             dragHandleModifier = dragHandleModifier,
                             onLaunchWhenNotReordering = {
                                 onAppClick(launchTargetFromAppInfo(app))
@@ -660,6 +670,16 @@ private fun DrawerAppListColumn(
                     contentType = { "app_row" }
             ) { index ->
                 val app = displayPrivateApps[index]
+                val appLetter = remember(app.label) { getAppIndexLetter(app.label) }
+                val isHighlighted =
+                        highlightedLetter == null ||
+                                appLetter.equals(highlightedLetter, ignoreCase = true)
+                val targetAlpha = if (isHighlighted) 1f else 0.2f
+                val animatedAlpha by animateFloatAsState(
+                        targetValue = targetAlpha,
+                        animationSpec = tween(durationMillis = 150),
+                        label = "private_app_highlight_alpha"
+                )
                 val currentIndex by rememberUpdatedState(index)
                 val isDraggedRow =
                         allowCustomDragReorder && index == draggedPrivateIndex
@@ -717,7 +737,7 @@ private fun DrawerAppListColumn(
                         allowCustomDragReorder = allowCustomDragReorder,
                         isDraggedRow = isDraggedRow,
                         offsetY = offsetY,
-                        rowAlpha = 1f,
+                        rowAlpha = animatedAlpha,
                         dragHandleModifier = dragHandleModifier,
                         onLaunchWhenNotReordering = {
                             val componentName = app.componentName
@@ -773,6 +793,7 @@ private fun DrawerAppListBody(
         onAddSearchFolder: (Uri) -> Unit = {},
         onRemoveSearchFolder: (Long, String) -> Unit = { _, _ -> },
         onReindexSearchFolders: () -> Unit = {},
+        highlightedLetter: String? = null,
         modifier: Modifier = Modifier,
 ) {
     DrawerAppListColumn(
@@ -794,6 +815,7 @@ private fun DrawerAppListBody(
             onAddSearchFolder = onAddSearchFolder,
             onRemoveSearchFolder = onRemoveSearchFolder,
             onReindexSearchFolders = onReindexSearchFolders,
+            highlightedLetter = highlightedLetter,
     )
 }
 
@@ -1233,6 +1255,8 @@ fun AppDrawerContent(
                 onToggleReorderApps = onToggleDrawerReorderApps,
         )
     }
+    var activeScrollbarLetter by remember { mutableStateOf<String?>(null) }
+
     val bodyViewport: @Composable ColumnScope.() -> Unit = {
         Box(
                 modifier =
@@ -1254,6 +1278,7 @@ fun AppDrawerContent(
                     onAddSearchFolder = onAddSearchFolder,
                     onRemoveSearchFolder = onRemoveSearchFolder,
                     onReindexSearchFolders = onReindexSearchFolders,
+                    highlightedLetter = activeScrollbarLetter,
                     modifier = Modifier.fillMaxSize()
             )
             if (!hideCharacterScroll && uiState.searchQuery.isEmpty()) {
@@ -1261,6 +1286,7 @@ fun AppDrawerContent(
                         dynamicAlphabet = dynamicAlphabet,
                         hasApps = { letter -> letterIndexMap.containsKey(letter) },
                         onLetterSelected = onLetterSelected,
+                        onActiveLetterChanged = { activeScrollbarLetter = it },
                         modifier = Modifier.align(Alignment.CenterEnd)
                 )
             }
@@ -1419,6 +1445,7 @@ private fun BoxScope.DrawerAlphabetIndex(
         dynamicAlphabet: List<String>,
         hasApps: (String) -> Boolean,
         onLetterSelected: (String, Boolean) -> Unit,
+        onActiveLetterChanged: (String?) -> Unit = {},
         modifier: Modifier = Modifier,
 ) {
     var isHoldingIndex by remember { mutableStateOf(false) }
@@ -1426,6 +1453,16 @@ private fun BoxScope.DrawerAlphabetIndex(
     var activeLetterJob by remember { mutableStateOf<Job?>(null) }
     var indexHeight by remember { mutableFloatStateOf(0f) }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(activeLetter) {
+        onActiveLetterChanged(activeLetter)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            onActiveLetterChanged(null)
+        }
+    }
 
     val selectLetterInternal: (String, Boolean) -> Unit = { letter, isDrag ->
         if (hasApps(letter)) {
@@ -1438,7 +1475,12 @@ private fun BoxScope.DrawerAlphabetIndex(
                 activeLetterJob = scope.launch {
                     delay(500)
                     activeLetter = null
+                    activeLetterJob = null
                 }
+            }
+        } else {
+            if (isDrag) {
+                activeLetter = letter
             }
         }
     }
@@ -1612,8 +1654,9 @@ private fun BoxScope.DrawerAlphabetIndex(
                                                     awaitRelease()
                                                 } finally {
                                                     isHoldingIndex = false
-                                                    activeLetterJob?.cancel()
-                                                    activeLetter = null
+                                                    if (activeLetterJob == null) {
+                                                        activeLetter = null
+                                                    }
                                                 }
                                             }
                                     )

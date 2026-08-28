@@ -334,10 +334,22 @@ class HomeViewModel @Inject constructor(
                     rawRightSideShortcuts,
                     _archivedAppKeys,
                     appRepository.getHiddenApps(),
-            ) { shortcuts, archivedKeys, hiddenEntities ->
-                val hiddenKeys = hiddenEntities.map { appMetadataKey(it.packageName, it.profileKey) }.toSet()
+                    _allInstalledApps,
+            ) { shortcuts, archivedKeys, hiddenEntities, installedApps ->
+                val installedKeys =
+                        installedApps.map { appMetadataKey(it.packageName, appProfileKey(it.userHandle)) }.toSet()
+                val hiddenKeys =
+                        hiddenEntities.map { appMetadataKey(it.packageName, it.profileKey) }.toSet()
                 shortcuts.filterNot {
                     shortcutArchivedKey(it) in archivedKeys || shortcutArchivedKey(it) in hiddenKeys
+                }.filter { shortcut ->
+                    when (val target = shortcut.target) {
+                        is ShortcutTarget.App ->
+                                appMetadataKey(target.packageName, shortcut.profileKey) in installedKeys
+                        is ShortcutTarget.LauncherShortcut ->
+                                appMetadataKey(target.packageName, shortcut.profileKey) in installedKeys
+                        else -> true
+                    }
                 }
             }.stateWhileSubscribedIn(
                     viewModelScope,
@@ -544,7 +556,6 @@ class HomeViewModel @Inject constructor(
         }
         applyInstalledAppsSnapshot(apps)
         val installedAppKeys = apps.map { appMetadataKey(it) }.toSet()
-        val archivedAppKeys = _archivedAppKeys.value
         val currentFavorites = rawFavorites.value
         val nonSentinel = currentFavorites.filterNot { it.isPhoneFavoriteSentinel() }
         val missingFavoriteKeys =
@@ -555,16 +566,6 @@ class HomeViewModel @Inject constructor(
                         .toSet()
         val launchableMissing =
                 launchableMissingFavoriteKeysSubset(nonSentinel, missingFavoriteKeys)
-        val updatedFavorites =
-                currentFavorites.filter {
-                    it.packageName == ShortcutTarget.PHONE_FAVORITE_SENTINEL_PACKAGE ||
-                            favoriteAppStableKey(it) in installedAppKeys ||
-                            favoriteAppStableKey(it) in archivedAppKeys ||
-                            favoriteAppStableKey(it) in launchableMissing
-                }
-        if (updatedFavorites.size != currentFavorites.size) {
-            preferencesManager.setFavorites(updatedFavorites)
-        }
         return launchableMissing.isNotEmpty()
     }
 
@@ -1644,14 +1645,6 @@ class HomeViewModel @Inject constructor(
                         remove(appMetadataKey(removedPkg, "0"))
                     }
                 }
-        _editFavorites.value =
-                _editFavorites.value.filterNot { it.matches(removedPkg, removedProfileKey) }
-        val currentFavorites = rawFavorites.value
-        val updatedFavorites =
-                currentFavorites.filterNot { it.matches(removedPkg, removedProfileKey) }
-        if (updatedFavorites.size != currentFavorites.size) {
-            preferencesManager.setFavorites(updatedFavorites)
-        }
     }
 
     private fun launchableMissingFavoriteKeysSubset(
