@@ -1356,18 +1356,25 @@ constructor(
                                     packageName = target.packageName,
                                     shortcutId = target.shortcutId,
                                     userHandle = target.userHandle,
-                            ) || appRepository.launchApp(target.packageName)
+                            ) || appRepository.launchApp(target.packageName, target.userHandle)
                     is LaunchTarget.PrivateApp -> {
                         if (privateSpaceManager.isPrivateSpaceProfile(target.userHandle)) {
                             val launched = privateSpaceManager.launchApp(target.componentName, target.userHandle)
-                            if (launched) true else appRepository.launchMainActivity(target.componentName, target.userHandle) || appRepository.launchApp(target.packageName)
+                            if (launched) true else appRepository.launchMainActivity(target.componentName, target.userHandle) || appRepository.launchApp(target.packageName, target.userHandle)
                         } else {
                             appRepository.launchMainActivity(target.componentName, target.userHandle)
-                                    || appRepository.launchApp(target.packageName)
+                                    || appRepository.launchApp(target.packageName, target.userHandle)
                         }
                     }
                 }
-        val finalOk = if (!ok) appRepository.launchApp(target.packageName) else ok
+        val finalOk = if (!ok) {
+            val uh = when (target) {
+                is LaunchTarget.MainApp -> null
+                is LaunchTarget.LauncherShortcut -> target.userHandle
+                is LaunchTarget.PrivateApp -> target.userHandle
+            }
+            appRepository.launchApp(target.packageName, uh)
+        } else ok
         if (finalOk) {
             viewModelScope.launch {
                 when (target) {
@@ -1531,6 +1538,7 @@ constructor(
     // --- Overflow menu ---
 
     fun toggleMenu() {
+        refreshPrivateSpaceState()
         _uiState.update { it.copy(showMenu = !it.showMenu) }
     }
     fun dismissMenu() {

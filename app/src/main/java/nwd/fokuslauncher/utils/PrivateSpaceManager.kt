@@ -41,6 +41,13 @@ class PrivateSpaceManager @Inject constructor(
         context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as LauncherApps
     }
 
+    private val prefs by lazy {
+        context.getSharedPreferences("private_space_prefs", Context.MODE_PRIVATE)
+    }
+
+    @Volatile
+    private var cachedPrivateProfile: UserHandle? = null
+
     /**
      * Emits whenever the Private Space profile becomes available (unlocked) or
      * unavailable (locked). Collectors should call [isPrivateSpaceUnlocked] and
@@ -73,8 +80,14 @@ class PrivateSpaceManager @Inject constructor(
             }
         }
         val filter = IntentFilter().apply {
-            addAction("android.intent.action.PROFILE_AVAILABLE")
-            addAction("android.intent.action.PROFILE_UNAVAILABLE")
+            addAction(Intent.ACTION_PROFILE_AVAILABLE)
+            addAction(Intent.ACTION_PROFILE_UNAVAILABLE)
+            addAction(Intent.ACTION_MANAGED_PROFILE_AVAILABLE)
+            addAction(Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE)
+            addAction(Intent.ACTION_MANAGED_PROFILE_UNLOCKED)
+            addAction(Intent.ACTION_USER_UNLOCKED)
+            addAction(Intent.ACTION_USER_FOREGROUND)
+            addAction(Intent.ACTION_USER_BACKGROUND)
         }
         if (Build.VERSION.SDK_INT >= 33) {
             context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -89,15 +102,75 @@ class PrivateSpaceManager @Inject constructor(
      */
     fun getPrivateSpaceProfile(): UserHandle? {
         if (!isSupported) return null
-        return try {
-            val profiles = userManager.userProfiles
-            profiles.firstOrNull { profile ->
-                profile != android.os.Process.myUserHandle() &&
-                    isPrivateSpaceProfile(profile)
+
+        val myUser = android.os.Process.myUserHandle()
+
+        // 1. Check cached profile in memory if it is still valid
+        cachedPrivateProfile?.let { cached ->
+            if (isProfileAlive(cached)) {
+                return cached
+            } else {
+                cachedPrivateProfile = null
             }
-        } catch (_: Exception) {
-            null
         }
+
+        // 2. Query LauncherApps.profiles first (returns hidden/quiet profiles on Android 15+)
+        try {
+            val launcherProfiles = launcherApps.profiles
+            val found = launcherProfiles.firstOrNull { profile ->
+                profile != myUser && isPrivateSpaceProfile(profile)
+            }
+            if (found != null) {
+                cachedPrivateProfile = found
+                savePersistedSerialNumber(found)
+                return found
+            }
+        } catch (_: Exception) {}
+
+        // 3. Fallback to UserManager.userProfiles
+        try {
+            val userProfiles = userManager.userProfiles
+            val found = userProfiles.firstOrNull { profile ->
+                profile != myUser && isPrivateSpaceProfile(profile)
+            }
+            if (found != null) {
+                cachedPrivateProfile = found
+                savePersistedSerialNumber(found)
+                return found
+            }
+        } catch (_: Exception) {}
+
+        // 4. Fallback to persisted serial number if profile is hidden in quiet mode
+        val persistedSerial = prefs.getLong(KEY_PERSISTED_SERIAL, -1L)
+        if (persistedSerial != -1L) {
+            try {
+                val restoredProfile = userManager.getUserForSerialNumber(persistedSerial)
+                if (restoredProfile != null && restoredProfile != myUser && isProfileAlive(restoredProfile)) {
+                    cachedPrivateProfile = restoredProfile
+                    return restoredProfile
+                }
+            } catch (_: Exception) {}
+        }
+
+        return null
+    }
+
+    private fun isProfileAlive(profile: UserHandle): Boolean {
+        return try {
+            val serial = userManager.getSerialNumberForUser(profile)
+            serial != -1L
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun savePersistedSerialNumber(profile: UserHandle) {
+        try {
+            val serial = userManager.getSerialNumberForUser(profile)
+            if (serial != -1L) {
+                prefs.edit().putLong(KEY_PERSISTED_SERIAL, serial).apply()
+            }
+        } catch (_: Exception) {}
     }
 
     /**
@@ -106,9 +179,18 @@ class PrivateSpaceManager @Inject constructor(
      */
     fun isPrivateSpaceProfile(profile: UserHandle): Boolean {
         if (Build.VERSION.SDK_INT < 35) return false
+        if (profile == android.os.Process.myUserHandle()) return false
         return try {
             val info = launcherApps.getLauncherUserInfo(profile)
-            info?.userType == "android.os.usertype.profile.PRIVATE"
+            val userType = info?.userType
+            if (userType == "android.os.usertype.profile.PRIVATE" ||
+                userType?.contains("PRIVATE", ignoreCase = true) == true
+            ) {
+                true
+            } else {
+                // If userType is not explicitly private, verify if it's not managed work
+                userType == "android.os.usertype.profile.PRIVATE"
+            }
         } catch (_: Exception) {
             false
         }
@@ -208,5 +290,9 @@ class PrivateSpaceManager @Inject constructor(
         } catch (_: Exception) {
             false
         }
+    }
+
+    companion object {
+        private const val KEY_PERSISTED_SERIAL = "persisted_private_space_serial"
     }
 }

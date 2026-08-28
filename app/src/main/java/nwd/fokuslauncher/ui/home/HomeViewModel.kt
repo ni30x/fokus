@@ -10,6 +10,7 @@ import android.location.LocationManager
 import android.os.BatteryManager
 import android.os.Process
 import android.os.UserHandle
+import android.os.UserManager
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.Settings
@@ -1437,11 +1438,13 @@ class HomeViewModel @Inject constructor(
         if (profileKey != "0") {
             val app = installedAppFor(packageName, profileKey)
             val componentName = app?.componentName
-            val userHandle = app?.userHandle
+            val userHandle = app?.userHandle ?: resolveUserHandleForShortcut(profileKey, packageName)
             if (componentName != null &&
-                            userHandle != null &&
                             appRepository.launchMainActivity(componentName, userHandle)
             ) {
+                return true
+            }
+            if (userHandle != Process.myUserHandle() && appRepository.launchApp(packageName, userHandle)) {
                 return true
             }
         }
@@ -1456,7 +1459,7 @@ class HomeViewModel @Inject constructor(
                     Intent(Intent.ACTION_VIEW, intentUri.toUri())
                 }
         try {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
             context.startActivity(intent)
         } catch (_: Exception) {
             // ignore malformed/unresolvable deep links
@@ -1467,7 +1470,7 @@ class HomeViewModel @Inject constructor(
         try {
             context.startActivity(
                     Intent(Intent.ACTION_DIAL, "tel:".toUri()).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                     }
             )
         } catch (_: Exception) { }
@@ -1475,7 +1478,17 @@ class HomeViewModel @Inject constructor(
 
     private fun resolveUserHandleForShortcut(profileKey: String, packageName: String): UserHandle {
         if (profileKey == "0") return Process.myUserHandle()
-        return installedAppFor(packageName, profileKey)?.userHandle ?: Process.myUserHandle()
+        installedAppFor(packageName, profileKey)?.userHandle?.let { return it }
+        val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
+        if (userManager != null) {
+            val profiles = try { userManager.userProfiles } catch (_: Exception) { emptyList() }
+            for (p in profiles) {
+                if (appProfileKey(p) == profileKey) {
+                    return p
+                }
+            }
+        }
+        return Process.myUserHandle()
     }
 
     fun formatShortcutTarget(target: ShortcutTarget, profileKey: String = "0"): String {

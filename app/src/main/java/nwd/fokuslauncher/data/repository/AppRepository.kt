@@ -679,15 +679,59 @@ constructor(
 
     /**
      * Launches an app by its package name.
-     * @param options optional [android.app.ActivityOptions] bundle for custom transition
-     * animations.
+     * @param options optional [android.app.ActivityOptions] bundle for custom transition animations.
      * @return true if the app was launched successfully, false otherwise.
      */
     fun launchApp(packageName: String, options: Bundle? = null): Boolean {
+        return launchApp(packageName, null, options)
+    }
+
+    /**
+     * Launches an app by its package name and specific [UserHandle].
+     * Uses [LauncherApps.startMainActivity] so the target UID receives top-level foreground priority
+     * and network capabilities on both the primary user and secondary/private profiles.
+     *
+     * @param userHandle the target [UserHandle] (or null to search default/all profiles).
+     * @param options optional [android.app.ActivityOptions] bundle for custom transition animations.
+     * @return true if the app was launched successfully, false otherwise.
+     */
+    fun launchApp(
+        packageName: String,
+        userHandle: UserHandle?,
+        options: Bundle? = null
+    ): Boolean {
         if (isPackageHiddenFromPlayStoreAndSystem(packageName)) return false
+        val launcherApps = launcherAppsOrNull()
+        val targetUser = userHandle ?: Process.myUserHandle()
+        if (launcherApps != null) {
+            try {
+                val activities = launcherApps.getActivityList(packageName, targetUser)
+                val mainComponent = activities.firstOrNull()?.componentName
+                if (mainComponent != null) {
+                    launcherApps.startMainActivity(mainComponent, targetUser, null, options)
+                    return true
+                }
+            } catch (_: Exception) {}
+
+            if (userHandle == null) {
+                val profiles = try { launcherApps.profiles } catch (_: Exception) { emptyList() }
+                for (profile in profiles) {
+                    if (profile == targetUser) continue
+                    try {
+                        val activities = launcherApps.getActivityList(packageName, profile)
+                        val mainComponent = activities.firstOrNull()?.componentName
+                        if (mainComponent != null) {
+                            launcherApps.startMainActivity(mainComponent, profile, null, options)
+                            return true
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
         val intent = context.packageManager.getLaunchIntentForPackage(packageName)
         return if (intent != null) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
             context.startActivity(intent, options)
             true
         } else {
